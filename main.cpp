@@ -1,5 +1,13 @@
+// ===========  BEGIN TEMP CODE ===========  
+//#define VK_USE_PLATFORM_WIN32_KHR
+// ===========  END TEMP CODE ===========  
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+
+// ===========  BEGIN TEMP CODE ===========  
+//#define GLFW_EXPOSE_NATIVE_WIN32
+//#include <GLFW/glfw3native.h>
+// ===========  END TEMP CODE ===========  
 
 #include <iostream>
 #include <stdexcept>
@@ -7,6 +15,8 @@
 #include <vector>
 #include <map>
 #include <optional>
+#include <set>
+
 
 const uint32_t WINDOW_WIDTH = 800;
 const uint32_t WINDOW_HEIGHT = 600;
@@ -53,9 +63,10 @@ class HelloTriangleApplication {
 private:
 	struct QueueFamilyIndices {
 		std::optional<uint32_t> graphicsFamily;
+		std::optional<uint32_t> presentFamily;
 
 		bool IsComplete() const {
-			return graphicsFamily.has_value();
+			return graphicsFamily.has_value() && presentFamily.has_value();
 		}
 	};
 
@@ -167,6 +178,30 @@ private:
 		return requiredExtensions;
 	}
 
+	void CreateSurface() {
+		VkResult result = glfwCreateWindowSurface(instance, window, nullptr, &surface);
+		if (result != VK_SUCCESS) {
+			throw std::runtime_error("failed to create window surace!");
+		}
+
+		// ===========  BEGIN TEMP CODE ===========  
+		//VkWin32SurfaceCreateInfoKHR createInfo {
+		//	VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR,	// sType
+		//	nullptr,											// pNext
+		//	0,													// flags
+		//	GetModuleHandle(nullptr),							// hinstance // DEBUG: throws if module freed before handle use
+		//	glfwGetWin32Window(window)							// hwnd
+		//};
+
+		//// technically a WSI extension function, but so common the Vulkan loader includes it
+		//// so vkGetInstanceProcAddr isn't needed
+		//VkResult resultTEMP = vkCreateWin32SurfaceKHR(instance, &createInfo, nullptr, &surface);
+		//if (resultTEMP != VK_SUCCESS) {
+		//	throw std::runtime_error("failed to create window surface!");
+		//}
+		// ===========  END TEMP CODE ===========  
+	}
+
 	void CreateInstance() {
 		if (enableValidationLayers && !CheckValidationLayerSupport()) {
 			throw std::runtime_error("validation layers requested, but not available!");
@@ -222,6 +257,10 @@ private:
 	void InitVulkan() {
 		CreateInstance();
 		SetupDebugMessenger();
+
+		// DEBUG: create window surface after instance and prior to device
+		// because it influences device selection (eg: multiple screens, etc)
+		CreateSurface(); 
 		PickPhysicalDevice();
 	}
 
@@ -287,6 +326,11 @@ private:
 		}
 	}
 
+	/// <summary>
+	/// Iterates the physical device's queue family indices and caches which ones support which properties
+	/// PERF: it is more efficient to use a single queue family index which supports both graphics and presentation
+	/// instead of two separate queue familily indeces
+	/// </summary>
 	QueueFamilyIndices FindQueueFamilies(VkPhysicalDevice device) {
 		QueueFamilyIndices indices;
 		uint32_t queueFamilyCount = 0;
@@ -297,34 +341,53 @@ private:
 		vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
 
 		// will pick the first device family that supports graphics queues
-		int i = 0;
+		int queueFamilyIndex = 0;
 		for (const auto& queueFamily : queueFamilies) {
+			VkBool32 presentSupport = false;
+
+			// TODO(? TF 2 FEB 2026): call may fail for unknown reasons, may be worth reacting to here
+			/*VkResult callSuccess = */vkGetPhysicalDeviceSurfaceSupportKHR(device, queueFamilyIndex, surface, &presentSupport);
+
 			if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-				indices.graphicsFamily = i;
+				indices.graphicsFamily = queueFamilyIndex;
 			}
 
-			// FIXME(? TF 2 FEB 2026): move break to below graphicsFamily value assignment 
+			if (presentSupport) {
+				indices.presentFamily = queueFamilyIndex;
+			}
+
 			if (indices.IsComplete()) {
 				break;
 			}
-			i++;
+			queueFamilyIndex++;
 		}
 
 		return indices;
 	}
 
 	void CreateLogicalDevice() {
-		QueueFamilyIndices indices = FindQueueFamilies(physicalDevice); // graphics-only (for now)
+		QueueFamilyIndices indices = FindQueueFamilies(physicalDevice);
 
-		float queuePriority = 1.0f; // 0.0 to 1.0f (required, even for 1 queue)
-		VkDeviceQueueCreateInfo queueCreateInfo {
-			VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, // sType
-			nullptr,									// pNext
-			0,											// flags
-			indices.graphicsFamily.value(),				// queueFamilyIndex
-			1,											// queueCount
-			&queuePriority								// pQueuePriorities
+		std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+		std::set<uint32_t> uniqueQueueFamilies = {
+			indices.graphicsFamily.value(),
+			indices.presentFamily.value()
 		};
+
+		// DEBUG: this may result in a single VkDeviceQueueCreateInfo entry if
+		// a device queue family index was found which supports both graphics and presentation
+		float queuePriority = 1.0f; // 0.0 to 1.0f (required, even for 1 queue)
+		for (uint32_t queueFamily : uniqueQueueFamilies) {
+			VkDeviceQueueCreateInfo queueCreateInfo{
+				VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, // sType
+				nullptr,									// pNext
+				0,											// flags
+				queueFamily,								// queueFamilyIndex
+				1,											// queueCount
+				&queuePriority								// pQueuePriorities
+			};
+			queueCreateInfos.push_back(queueCreateInfo);
+		}
 
 		VkPhysicalDeviceFeatures deviceFeatures	{
 			// TODO (TF 2 FEB 2026): left all VK_FALSE for now
@@ -342,16 +405,16 @@ private:
 		}
 
 		VkDeviceCreateInfo createInfo {
-			VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, // sType
-			nullptr,							  // pNext
-			0,									  // flags
-			1,									  // queueCreateInfoCount
-			&queueCreateInfo,					  // pQueueCreateInfos
-			enabledLayerCount,					  // enabledLayerCount
-			ppEnabledLayerNames,				  // ppEnabledLayerNames
-			enabledExtensionCount,				  // enabledExtensionCount
-			nullptr,							  // ppEnabledExtensionNames // TODO (TF 2 FEB 2025) use an extension (eg "VK_KHR_swapchain")
-			&deviceFeatures						  // pEnabledFeatures
+			VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,			// sType
+			nullptr,										// pNext
+			0,												// flags
+			static_cast<uint32_t>(queueCreateInfos.size()),	// queueCreateInfoCount
+			queueCreateInfos.data(),						// pQueueCreateInfos
+			enabledLayerCount,								// enabledLayerCount
+			ppEnabledLayerNames,							// ppEnabledLayerNames
+			enabledExtensionCount,							// enabledExtensionCount
+			nullptr,										// ppEnabledExtensionNames // TODO (TF 2 FEB 2025) use an extension (eg "VK_KHR_swapchain")
+			&deviceFeatures									// pEnabledFeatures
 		};
 
 		VkResult result = vkCreateDevice(physicalDevice, &createInfo, nullptr, &logicalDevice);
@@ -359,8 +422,11 @@ private:
 			throw std::runtime_error("failed to create locial device!");
 		}
 
-		// get the handle for the queue to which work will be submitted (default index to 0)
-		vkGetDeviceQueue(logicalDevice, indices.graphicsFamily.value(), graphicsQueueIndex, &graphicsQueue);
+		// get the handles for the queues to which work will be submitted
+		// (default indices for future use will be 0)
+		// DEBUG: if only one queue family index was used for creation, then both handles will be identical
+		vkGetDeviceQueue(logicalDevice, indices.graphicsFamily.value(), defaultQueueIndex, &graphicsQueue);
+		vkGetDeviceQueue(logicalDevice, indices.presentFamily.value(), defaultQueueIndex, &presentQueue);
 	}
 
 	void PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) {
@@ -410,6 +476,9 @@ private:
 			DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
 		}
 
+		// destroy in reverse order of creation
+		vkDestroySurfaceKHR(instance, surface, nullptr);
+
 		// DEBUG: physicalDevice handles are implicitly cleaned up with the instance is destroyed
 		vkDestroyInstance(instance, nullptr);
 
@@ -422,8 +491,10 @@ private:
 	VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
 	VkDevice logicalDevice;
 	VkQueue graphicsQueue;
-	uint32_t graphicsQueueIndex = 0;
+	VkQueue presentQueue;
+	uint32_t defaultQueueIndex = 0;
 	VkDebugUtilsMessengerEXT debugMessenger;
+	VkSurfaceKHR surface;
 	GLFWwindow* window;
 
 };
