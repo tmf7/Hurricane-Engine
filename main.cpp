@@ -20,7 +20,8 @@
 #include <cstdint> // for uint32_t
 #include <limits> // for std::numeric_limits
 #include <algorithm> // for std::clamp
-
+#include <fstream>
+#include <format>
 
 const uint32_t WINDOW_WIDTH = 800;
 const uint32_t WINDOW_HEIGHT = 600;
@@ -104,6 +105,22 @@ public:
 		// should be aborted with VK_ERROR_VALIDATION_FAILED_EXT error.
 		// However, that typically for testing layers themselves.
 		return VK_FALSE; 
+	}
+
+	static std::vector<char> ReadFile(const std::string& filename) {
+		std::ifstream file(filename, std::ios::ate | std::ios::binary);
+
+		if (!file.is_open()) {
+			throw std::runtime_error(std::format("failed to open file [{0}]!", filename));
+		}
+
+		size_t fileSize = (size_t)file.tellg();
+		std::vector<char> buffer(fileSize);
+		file.seekg(0);
+		file.read(buffer.data(), fileSize);
+		file.close();
+
+		return buffer;
 	}
 
 private:
@@ -282,11 +299,302 @@ private:
 		CreateSwapChain();
 		CreateSwapChainImageViews();
 
+		CreateRenderPass();
 		CreateGraphicsPipeline();
 	}
 
+	void CreateRenderPass() {
+		VkAttachmentDescription colorAttachment {
+			0,									// flags
+			swapChainImageFormat,				// format
+			VK_SAMPLE_COUNT_1_BIT,				// samples
+			VK_ATTACHMENT_LOAD_OP_CLEAR,		// loadOp // TODO (TF 4 FEB 2026): experiment with not clearning the image before rendering to it
+			VK_ATTACHMENT_STORE_OP_STORE,		// storeOp
+			VK_ATTACHMENT_LOAD_OP_DONT_CARE,	// stencilLoadOp
+			VK_ATTACHMENT_STORE_OP_DONT_CARE,	// stencilStoreOp
+			VK_IMAGE_LAYOUT_UNDEFINED,			// initialLayout
+			VK_IMAGE_LAYOUT_PRESENT_SRC_KHR		// finalLayout // TODO (TF 4 FEB 2026): experiment with VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL for memory copy instead of presentation
+		};
+
+		VkAttachmentReference colorAttachmentRef {
+			0,											// attachment DEBUG: aka the index referenced in "layout(location = 0) out vec4 outColor" of a shader
+			VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL	// layout
+		};
+
+		// TODO (TF 4 FEB 2026): experiment with input, resolve, depthStencil, and preserve attachments
+		VkSubpassDescription subpass {
+			0,									// flags
+			VK_PIPELINE_BIND_POINT_GRAPHICS,	// pipelineBindPoint
+			0,									// inputAttachmentCount
+			nullptr,							// pInputAttachments
+			1,									// colorAttachmentCount
+			&colorAttachmentRef,				// pColorAttachments
+			nullptr,							// pResolveAttachments // matches the number in colorAttachmentCount (for mulitsampling)
+			nullptr,							// pDepthStencilAttachment // only one
+			0,									// preserveAttachmentCount
+			nullptr								// pPreserveAttachments
+		};
+
+		// TODO (TF 4 FEB 2026): experiment with VkSubpassDependency 
+		VkRenderPassCreateInfo renderPassInfo {
+			VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,	// sType
+			nullptr,									// pNext
+			0,											// flags
+			1,											// attachmentCount
+			&colorAttachment,							// pAttachments
+			1,											// subpassCount
+			&subpass,									// pSubpasses
+			0,											// dependencyCount
+			nullptr										// pDependencies
+		};
+
+		VkResult result = vkCreateRenderPass(logicalDevice, &renderPassInfo, nullptr, &renderPass);
+		if (result != VK_SUCCESS) {
+			throw std::runtime_error("failed to create render pass!");
+		}
+	}
+
+	VkShaderModule CreateShaderModule(const std::vector<char>& code) {
+		// DEBUG: std::vector default allocator ensures data satisfies worst-case alignment requirements
+		// so reinterpret_cast from char to uint32_t does not adversly affect byte alignment here
+		VkShaderModuleCreateInfo createInfo{
+			VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,	// sType
+			nullptr,										// pNext
+			0,												// flags
+			code.size(),									// codeSize
+			reinterpret_cast<const uint32_t*>(code.data())	// pCode
+		};
+
+		VkShaderModule shaderModule;
+		VkResult result = vkCreateShaderModule(logicalDevice, &createInfo, nullptr, &shaderModule);
+		if (result != VK_SUCCESS) {
+			throw std::runtime_error("failed to create shader module!");
+		}
+
+		return shaderModule; // code buffer no longer needed for this module to function
+	}
+
 	void CreateGraphicsPipeline() {
-	
+		// TODO (TF 4 FEB 2026): remove hardcoded shader loading dependency
+		auto vertShaderCode = ReadFile("Shaders/vert.spv");
+		auto fragShaderCode = ReadFile("Shaders/frag.spv");
+		
+		VkShaderModule vertShaderModule = CreateShaderModule(vertShaderCode);
+		VkShaderModule fragShaderModule = CreateShaderModule(fragShaderCode);
+
+
+		VkPipelineShaderStageCreateInfo vertShaderStageInfo {
+			VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, // sType
+			nullptr,											 // pNext
+			0,													 // flags
+			VK_SHADER_STAGE_VERTEX_BIT,							 // stage
+			vertShaderModule,									 // module
+			"main",												 // pName // TODO (TF 4 FEB 2026): experiment with multiple shaders with multiple entry points in one module
+			nullptr												 // pSpecializationinfo // TODO (TF 4 FEB 2026): experiment with specialization info (push constants, etc)
+		};
+
+		VkPipelineShaderStageCreateInfo fragShaderStageInfo {
+			VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, // sType
+			nullptr,											 // pNext
+			0,													 // flags
+			VK_SHADER_STAGE_FRAGMENT_BIT,						 // stage
+			fragShaderModule,									 // module
+			"main",												 // pName // TODO (TF 4 FEB 2026): experiment with multiple shaders with multiple entry points in one module
+			nullptr												 // pSpecializationinfo // TODO (TF 4 FEB 2026): experiment with specialization info (push constants, etc)
+		};
+
+		VkPipelineShaderStageCreateInfo shaderStages[] = {
+			vertShaderStageInfo,
+			fragShaderStageInfo
+		};
+
+		// TODO (TF 4 FEB 2026): use vertex and index buffers instead of hardcoding verticies in shaders
+		VkPipelineVertexInputStateCreateInfo vertexInputInfo{
+			VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,	// sType
+			nullptr,													// pNext
+			0,															// flags
+			0,															// vertexBindingDescriptionCount
+			nullptr,													// pVertexBindingDescriptions
+			0,															// vertexAttributeDescriptionCount
+			nullptr														// pVertexAttributeDescriptions
+		};
+
+		VkPipelineInputAssemblyStateCreateInfo inputAssembly {
+			VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, // sType
+			nullptr,													 // pNext
+			0,															 // flags
+			VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,						 // topology
+			VK_FALSE													 // primitiveRestartEnable;
+		};
+
+		// use entire framebuffer area via the swapChainExtent
+		VkViewport viewport {
+			0,								// x
+			0,								// y
+			(float)swapChainExtent.width,	// width
+			(float)swapChainExtent.height,	// height
+			0.0f,							// minDepth
+			1.0f							// maxDepth
+		};
+
+		// only discard outsize swapChainExtent (ie: keep entire framebuffer)
+		VkRect2D scissor {
+			{0, 0},			// offset
+			swapChainExtent	// extent
+		};
+
+		// TODO (TF 4 FEB 2026): experiment with a dynamic state pipeline and using commands to set viewport and scissor
+		std::vector<VkDynamicState> dynamicStates = {
+			VK_DYNAMIC_STATE_VIEWPORT,
+			VK_DYNAMIC_STATE_SCISSOR
+		};
+
+		VkPipelineDynamicStateCreateInfo dynamicState {
+			VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,	// sType
+			nullptr,												// pNext
+			0,														// flags
+			static_cast<uint32_t>(dynamicStates.size()),			// dynamicStateCount
+			dynamicStates.data()									// pDynamicStates
+		};
+
+		VkPipelineViewportStateCreateInfo viewportState {
+			VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,	// sType
+			nullptr,												// pNext
+			0,														// flags
+			1,														// viewportCount
+			&viewport,												// pViewPorts
+			1,														// scissorCount
+			&scissor												// pScissors
+		};
+
+		VkPipelineRasterizationStateCreateInfo rasterizer {
+			VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,	// sType
+			nullptr,													// pNext
+			0,															// flags
+			VK_FALSE,													// depthClampEnable // TODO (TF 4 FEB 2026): experiemnt with enabled depth clipping (eg: for shadow maps) (reqires enabled GPU feature)
+			VK_FALSE,													// rasterizerDiscardEnable // if true, then geo never hits rasterizer
+			VK_POLYGON_MODE_FILL,										// polygonMode // TODO: (TF 4 FEB 2026): experiment with line and point modes
+			VK_CULL_MODE_BACK_BIT,										// cullMode // TODO (TF 4 FEB 2026): experiment with cull off, etc
+			VK_FRONT_FACE_CLOCKWISE,									// frontFace
+			VK_FALSE,													// depthBiasEnable // TODO (TF 4 FEB 2026): experiment with depth bias for shadow maps / z-fighting resolution
+			0.0f,														// depthBiasConstantFactor
+			0.0f,														// depthBiasClamp
+			0.0f,														// depthBiasSlopeFactor
+			1.0f														// lineWidth // TODO (TF 4 FEB 2026): experiment with wideLines GPU feature
+		};
+
+		// TODO (TF 4 FEB 2026): experiment with multisampling
+		VkPipelineMultisampleStateCreateInfo multisampling {
+			VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, // sType
+			nullptr,												  // pNext
+			0,														  // flags
+			VK_SAMPLE_COUNT_1_BIT,									  // rasterizationSamples
+			VK_FALSE,												  // sampleShadingEnable
+			1.0f,													  // minSampleShading
+			nullptr,												  // pSampleMask
+			VK_FALSE,												  // alphaToCoverageEnable
+			VK_FALSE												  // alphaToOneEnable
+		};
+
+		// TODO (TF 4 FEB 2026): experiment with depth and stencil testing
+		//VkPipelineDepthStencilStateCreateInfo depthStencil {
+		//	VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,	// sType
+		//	nullptr,													// pNext
+		//	0,															// flags
+		//	// depthTestEnable
+		//	// depthWriteEnable
+		//	// depthCompareOp;
+		//	// depthBoundsTestEnable
+		//	// stencilTestEnable
+		//	// front
+		//	// back
+		//	// minDepthBounds
+		//	// maxDepthBounds
+		//};
+
+		// TODO (TF 4 FEB 2026): experiment with color blending operations
+		// per-framebuffer config (alpha mixing old and new values)
+		VkPipelineColorBlendAttachmentState colorBlendAttachment {
+			VK_FALSE,					// blendEnable
+			VK_BLEND_FACTOR_ONE,		// srcColorBlendFactor
+			VK_BLEND_FACTOR_ZERO,		// dstColorBlendFactor
+			VK_BLEND_OP_ADD,			// colorBlendOp
+			VK_BLEND_FACTOR_ONE,		// srcAlphaBlendFactor
+			VK_BLEND_FACTOR_ZERO,		// dstAlphaBlendFactor
+			VK_BLEND_OP_ADD,			// alphaBlendOp
+			VK_COLOR_COMPONENT_R_BIT 
+			| VK_COLOR_COMPONENT_G_BIT 
+			| VK_COLOR_COMPONENT_B_BIT 
+			| VK_COLOR_COMPONENT_A_BIT	// colorWriteMask
+		};
+
+		// TODO (TF 4 FEB 2026): experiment with global color blending operations
+		// global color blending config (bitwise combination of old and new values)
+		// DEBUG: logicOpEnable == VK_TRUE forces all VkPipelineColorBlendAttachmentState::blendEnable == VK_FALSE,
+		// however the colorWriteMasks will still be used
+		VkPipelineColorBlendStateCreateInfo colorBlending {
+			VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,	// sType
+			nullptr,													// pNext
+			0,															// flags
+			VK_FALSE,													// logicOpEnable
+			VK_LOGIC_OP_COPY,											// logicOp
+			1,															// attachmentCount
+			&colorBlendAttachment,										// pAttachments
+			{0.0f, 0.0f, 0.0f, 0.0f}									// blendConstants
+		};
+
+		// TODO (TF 4 FEB 2026): experiment with uniforms and push constants
+		VkPipelineLayoutCreateInfo pipelineLayoutInfo {
+			VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,	// sType
+			nullptr,										// pNext
+			0,												// flags
+			0,												// setLayoutCount
+			nullptr,										// pSetLayouts
+			0,												// pushConstantRangeCount
+			nullptr,										// pPushConstantRanges
+		};
+
+		VkResult pipelineLayoutCreateResult = vkCreatePipelineLayout(logicalDevice, &pipelineLayoutInfo, nullptr, &pipelineLayout);
+		if (pipelineLayoutCreateResult != VK_SUCCESS) {
+			throw std::runtime_error("failed to create pipeline layout!");
+		}
+
+		// TODO (TF 4 FEB 2026): experiment with VK_PIPELINE_CREATE_DERIVATIVE_BIT
+		// and using alternate subpasses https://docs.vulkan.org/spec/latest/chapters/renderpass.html#renderpass-compatibility
+		VkGraphicsPipelineCreateInfo pipelineInfo {
+			VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,	// sType
+			nullptr,											// pNext
+			0,													// flags
+			2,													// stageCount
+			shaderStages,										// pStages
+			&vertexInputInfo,									// pVertexInputState
+			&inputAssembly,										// pInputAsssemblyState
+			nullptr,											// pTessellationState
+			&viewportState,										// pViewportState
+			&rasterizer,										// pRasterizationState
+			&multisampling,										// pMultisampleState
+			nullptr,											// pDepthStencilState
+			&colorBlending,										// pColorBlendState
+			&dynamicState,										// pDynamicState
+			pipelineLayout,										// layout
+			renderPass,											// renderPass
+			0,													// subpass
+			VK_NULL_HANDLE,										// basePipelineHandle
+			-1													// basePipelineIndex
+		};
+
+		// TODO (TF 4 FEB 2026): experiment with creating multiple pipelines at once
+		// and with using a VkPipelineCache across multiple application runs via file cache
+		VkResult pipelineCreateResult = vkCreateGraphicsPipelines(logicalDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline);
+		if (pipelineCreateResult != VK_SUCCESS) {
+			throw std::runtime_error("failed to create graphics pipeline!");
+		}
+
+		// shader modules no longer needed for this pipeline to function
+		vkDestroyShaderModule(logicalDevice, vertShaderModule, nullptr);
+		vkDestroyShaderModule(logicalDevice, fragShaderModule, nullptr);
+
+		std::cout << __FUNCTION__ << std::endl;
 	}
 
 	void CreateSwapChain() {
@@ -713,6 +1021,10 @@ private:
 	}
 
 	void Cleanup() {
+		vkDestroyPipeline(logicalDevice, graphicsPipeline, nullptr);
+		vkDestroyPipelineLayout(logicalDevice, pipelineLayout, nullptr);
+		vkDestroyRenderPass(logicalDevice, renderPass, nullptr);
+
 		for (auto imageView : swapChainImageViews) {
 			vkDestroyImageView(logicalDevice, imageView, nullptr);
 		}
@@ -753,6 +1065,10 @@ private:
 	VkFormat swapChainImageFormat;
 	VkExtent2D swapChainExtent;
 	std::vector<VkImageView> swapChainImageViews;
+
+	VkRenderPass renderPass;
+	VkPipelineLayout pipelineLayout;
+	VkPipeline graphicsPipeline;
 };
 
 int main() {
