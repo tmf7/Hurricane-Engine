@@ -23,6 +23,52 @@
 #include <fstream>
 #include <format>
 
+#include <glm/glm.hpp>
+#include <array>
+
+struct Vertex {
+	glm::vec2 pos;
+	glm::vec3 color;
+
+	// TODO (TF 6 FEB 2026): pass in binding == 0 to indicate the singlar vertex buffer binding's index
+	static VkVertexInputBindingDescription GetBindingDescription(uint32_t binding) {
+		VkVertexInputBindingDescription bindingDescription {
+			binding,					// binding
+			sizeof(Vertex),				// stride
+			VK_VERTEX_INPUT_RATE_VERTEX // inputRate // TODO (TF 6 FEB 2026): experiment with instanced rendering
+		};
+
+		return bindingDescription;
+	}
+
+	// TODO (TF 6 FEB 2026): pass in binding == 0 to indicate the singlar vertex buffer binding's index
+	// similarly set location == 0 so attributes are referenced correctly
+	// ALTERNATIVELY: split this into distinct function calls like GetPositionAttributeDescription(binding), etc
+	static std::array<VkVertexInputAttributeDescription, 2> GetAttributeDescriptions(uint32_t binding, uint32_t location) {
+		std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions{};
+
+		attributeDescriptions[0].binding = binding;
+		attributeDescriptions[0].location = location;
+		attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
+		attributeDescriptions[0].offset = offsetof(Vertex, pos);
+
+		attributeDescriptions[1].binding = binding;
+		attributeDescriptions[1].location = location + 1; // DEBUG: prior attribute only takes up one 32-bit slot
+		attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+		attributeDescriptions[1].offset = offsetof(Vertex, color);
+
+
+		return attributeDescriptions;
+	}
+
+};
+
+const std::vector<Vertex> vertices = {
+	{{0.0f, -0.5f}, {1.0f, 0.0, 0.0f}},
+	{{0.5f, 0.5f}, {0.0f, 1.0, 0.0f}},
+	{{-0.5f, 0.5f}, {0.0f, 0.0, 1.0f}}
+};
+
 const uint32_t WINDOW_WIDTH = 800;
 const uint32_t WINDOW_HEIGHT = 600;
 const int MAX_FRAMES_IN_FLIGHT = 2;
@@ -124,6 +170,11 @@ public:
 		return buffer;
 	}
 
+	static void FramebufferResizeCallback(GLFWwindow* window, int width, int height) {
+		auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+		app->framebufferResized = true;
+	}
+
 private:
 	void InitWindow(uint32_t WindowWidth, uint32_t WindowHeight) {
 		// TODO (TF 30 JAN 2026): experiment with creating a window using 
@@ -131,9 +182,11 @@ private:
 		glfwInit();
 
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-		glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+		//glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
 		window = glfwCreateWindow(WindowWidth, WindowHeight, "Vulkan Hurricane", nullptr, nullptr);
+		glfwSetWindowUserPointer(window, this);
+		glfwSetFramebufferSizeCallback(window, FramebufferResizeCallback);
 	}
 
 	bool CheckValidationLayerSupport() {
@@ -304,9 +357,64 @@ private:
 		CreateGraphicsPipeline();
 		CreateFramebuffers();
 		CreateCommandPool();
+
+		CreateVertexBuffer();
 		CreateCommandBuffers();
 		
 		CreateSyncObjects();
+	}
+
+	uint32_t FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+		VkPhysicalDeviceMemoryProperties memProperties;
+		vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+
+		for (uint32_t i = 0; i < memProperties.memoryTypeCount; ++i) {
+			if (typeFilter & (1 << i)
+				&& (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+				return i;
+			}
+		}
+
+		throw std::runtime_error("failed to find suitable memory type!");
+	}
+
+	void CreateVertexBuffer() {
+		VkBufferCreateInfo bufferInfo {
+			VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,	// sType
+			nullptr,								// pnext
+			0,										// flags  // DEBUG: not a sparce buffer for now
+			sizeof(vertices[0]) * vertices.size(),	// size
+			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,		// usage
+			VK_SHARING_MODE_EXCLUSIVE,				// sharingMode // DEBUG: only used by the graphicsQueue for now
+			0,										// queueFamilyIndexCount
+			nullptr									// pQueueFamilyIndices
+		};
+
+		VkResult bufferResult = vkCreateBuffer(logicalDevice, &bufferInfo, nullptr, &vertexBuffer);
+		if (bufferResult != VK_SUCCESS) {
+			throw std::runtime_error("failed to create vertex buffer!");
+		}
+
+		VkMemoryRequirements memRequirements;
+		vkGetBufferMemoryRequirements(logicalDevice, vertexBuffer, &memRequirements);
+
+		uint32_t memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+		VkMemoryAllocateInfo allocInfo {
+			VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,		// sType
+			nullptr,									// pNext
+			memRequirements.size,						// allocationSize
+			memoryTypeIndex								// memoryTypeIndex
+		};
+
+		VkResult memoryResult = vkAllocateMemory(logicalDevice, &allocInfo, nullptr, &vertexBufferMemory);
+		if (memoryResult != VK_SUCCESS) {
+			throw std::runtime_error("failed to allocate vertex buffer memory!");
+		}
+
+		// DEBUG: singlar vertex buffer and memory binding so offset is 0
+		vkBindBufferMemory(logicalDevice, vertexBuffer, vertexBufferMemory, 0);
 	}
 
 	void CreateSyncObjects() {
@@ -525,15 +633,20 @@ private:
 			fragShaderStageInfo
 		};
 
+		// TODO (TF 6 FEB 2026): automate creating more than one binding
+		auto bindingDescription = Vertex::GetBindingDescription(0); 
+		auto attributeDescription = Vertex::GetAttributeDescriptions(0, 0);
+
+
 		// TODO (TF 4 FEB 2026): use vertex and index buffers instead of hardcoding verticies in shaders
 		VkPipelineVertexInputStateCreateInfo vertexInputInfo{
 			VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,	// sType
 			nullptr,													// pNext
 			0,															// flags
-			0,															// vertexBindingDescriptionCount
-			nullptr,													// pVertexBindingDescriptions
-			0,															// vertexAttributeDescriptionCount
-			nullptr														// pVertexAttributeDescriptions
+			1,															// vertexBindingDescriptionCount
+			&bindingDescription,										// pVertexBindingDescriptions
+			1,															// vertexAttributeDescriptionCount
+			attributeDescription.data()									// pVertexAttributeDescriptions
 		};
 
 		VkPipelineInputAssemblyStateCreateInfo inputAssembly {
@@ -710,6 +823,55 @@ private:
 		// shader modules no longer needed for this pipeline to function
 		vkDestroyShaderModule(logicalDevice, vertShaderModule, nullptr);
 		vkDestroyShaderModule(logicalDevice, fragShaderModule, nullptr);
+	}
+
+	void CleanupSwapChain() {
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+			vkDestroySemaphore(logicalDevice, imageAvailableSemaphores[i], nullptr);
+			vkDestroyFence(logicalDevice, inFlightFences[i], nullptr);
+		}
+
+		for (size_t i = 0; i < swapChainImages.size(); ++i) {
+			vkDestroySemaphore(logicalDevice, renderFinishedSemaphores[i], nullptr);
+		}
+
+		for (auto framebuffer : swapChainFramebuffers) {
+			vkDestroyFramebuffer(logicalDevice, framebuffer, nullptr);
+		}
+
+		for (auto imageView : swapChainImageViews) {
+			vkDestroyImageView(logicalDevice, imageView, nullptr);
+		}
+
+		// swapchain images are implicitly cleaned up when the swapchain is destroyed
+		vkDestroySwapchainKHR(logicalDevice, swapChain, nullptr);
+	}
+
+	void RecreateSwapChain() {
+		int width = 0;
+		int height = 0;
+		glfwGetFramebufferSize(window, &width, &height);
+
+		// TODO (TF 6 FEB 2026): do more than a brute force wait until window is 
+		// in forground/non-zero size again
+		while (width == 0 || height == 0) {
+			glfwGetFramebufferSize(window, &width, &height);
+			glfwWaitEvents();
+		}
+
+		// TODO (TF 6 FEB 2026): explicitly wait for the oldSwapChain to be available and destroy that
+		// meanwhile create a new SwapChain to start rendering to the resized/new window properties
+		// ie: pass oldSwapChain into vkCreateSwapchainKHR
+		vkDeviceWaitIdle(logicalDevice);
+
+		CleanupSwapChain();
+
+		// DEBUG: the renderpass would also need to be recreated if the swapchain imageformat
+		// changed, for example, when application window changes monitors
+		CreateSwapChain();
+		CreateSwapChainImageViews();
+		CreateFramebuffers();
+		CreateSyncObjects();
 	}
 
 	void CreateSwapChain() {
@@ -1204,12 +1366,21 @@ private:
 	void DrawFrame() {
 		// TODO (TF 5 FEB 2026) Experiment with timeline semaphores
 		vkWaitForFences(logicalDevice, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
-		vkResetFences(logicalDevice, 1, &inFlightFences[currentFrame]);
 
 		uint32_t imageIndex;
-
-		// TODO(TF 5 FEB 2026) : add swapchain nextImage failure handling (don't crash)
-		vkAcquireNextImageKHR(logicalDevice, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+		VkResult acquireResult = vkAcquireNextImageKHR(logicalDevice, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+		
+		if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
+			RecreateSwapChain();
+			return;
+		}
+		else if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
+			throw std::runtime_error("failed to acquire swapchain image!");
+		}
+		
+		// only reset the fence once work can be submitted on the swapchain image
+		vkResetFences(logicalDevice, 1, &inFlightFences[currentFrame]);
+		
 		vkResetCommandBuffer(commandBuffers[currentFrame], 0); // TODO (TF 5 FEB 2026): experiment with releasing resources on rest
 
 		RecordCommandBuffer(commandBuffers[currentFrame], imageIndex);
@@ -1235,8 +1406,8 @@ private:
 			signalSemaphores					// pSignalSemaphores
 		};
 
-		VkResult result = vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]);
-		if (result != VK_SUCCESS) {
+		VkResult submitResult = vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]);
+		if (submitResult != VK_SUCCESS) {
 			throw std::runtime_error("failed to submit draw command buffer!");
 		}
 
@@ -1253,40 +1424,37 @@ private:
 			nullptr									// pResults
 		};
 
-		// TODO (TF 5 FEB 2026): add presentation failure handling (don't crash)
-		vkQueuePresentKHR(presentQueue, &presentInfo);
+		VkResult presentResult = vkQueuePresentKHR(presentQueue, &presentInfo);
+
+		// DEBUG: ensure the explicit framebufferResized check occurs after vkQueuePresentKHR call
+		// so that waitSemaphores are actually waited on
+		if (presentResult == VK_ERROR_OUT_OF_DATE_KHR 
+			|| presentResult == VK_SUBOPTIMAL_KHR
+			|| framebufferResized) {
+			framebufferResized = false;
+			RecreateSwapChain();
+		}
+		else if (presentResult != VK_SUCCESS) {
+			throw std::runtime_error("failed to present swapchain image!");
+		}
 
 		// keep multiple frames in flight so CPU isn't waiting too long on the GPU
 		currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
 
 	void Cleanup() {
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-			vkDestroySemaphore(logicalDevice, imageAvailableSemaphores[i], nullptr);
-			vkDestroyFence(logicalDevice, inFlightFences[i], nullptr);
-		}
+		CleanupSwapChain();
 
-		for (size_t i = 0; i < swapChainImages.size(); ++i) {
-			vkDestroySemaphore(logicalDevice, renderFinishedSemaphores[i], nullptr);
-		}
-
-		// all command buffers are implicitly cleaned up when the command pool is destroyed
-		vkDestroyCommandPool(logicalDevice, commandPool, nullptr);
-
-		for (auto framebuffer : swapChainFramebuffers) {
-			vkDestroyFramebuffer(logicalDevice, framebuffer, nullptr);
-		}
+		vkDestroyBuffer(logicalDevice, vertexBuffer, nullptr);
+		vkFreeMemory(logicalDevice, vertexBufferMemory, nullptr);
 
 		vkDestroyPipeline(logicalDevice, graphicsPipeline, nullptr);
 		vkDestroyPipelineLayout(logicalDevice, pipelineLayout, nullptr);
+
 		vkDestroyRenderPass(logicalDevice, renderPass, nullptr);
-
-		for (auto imageView : swapChainImageViews) {
-			vkDestroyImageView(logicalDevice, imageView, nullptr);
-		}
-
-		// swapchain images are implicitly cleaned up when the swapchain is destroyed
-		vkDestroySwapchainKHR(logicalDevice, swapChain, nullptr);
+		
+		// all command buffers are implicitly cleaned up when the command pool is destroyed
+		vkDestroyCommandPool(logicalDevice, commandPool, nullptr);
 
 		// device queues are implicitly cleaned up when the devices is destroyed
 		vkDestroyDevice(logicalDevice, nullptr);
@@ -1334,7 +1502,11 @@ private:
 	std::vector<VkSemaphore> renderFinishedSemaphores;
 	std::vector<VkFence> inFlightFences;
 
+	VkBuffer vertexBuffer;
+	VkDeviceMemory vertexBufferMemory;
+
 	uint32_t currentFrame = 0;
+	bool framebufferResized = false;
 };
 
 int main() {
