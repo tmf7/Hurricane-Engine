@@ -57,16 +57,20 @@ struct Vertex {
 		attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
 		attributeDescriptions[1].offset = offsetof(Vertex, color);
 
-
 		return attributeDescriptions;
 	}
 
 };
 
 const std::vector<Vertex> vertices = {
-	{{0.0f, -0.5f}, {1.0f, 0.0, 0.0f}},
-	{{0.5f, 0.5f}, {0.0f, 1.0, 0.0f}},
-	{{-0.5f, 0.5f}, {0.0f, 0.0, 1.0f}}
+	{{-0.5f, -0.5f}, {1.0f, 0.0, 0.0f}},
+	{{0.5f, -0.5f}, {0.0f, 1.0, 0.0f}},
+	{{0.5f, 0.5f}, {0.0f, 0.0, 1.0f}},
+	{{-0.5f, 0.5f}, {1.0f, 1.0, 1.0f}}
+};
+
+const std::vector<uint16_t> indices = {
+	0, 1, 2, 2, 3, 0
 };
 
 const uint32_t WINDOW_WIDTH = 800;
@@ -120,9 +124,12 @@ private:
 	struct QueueFamilyIndices {
 		std::optional<uint32_t> graphicsFamily;
 		std::optional<uint32_t> presentFamily;
+		std::optional<uint32_t> transferFamily;
 
 		bool IsComplete() const {
-			return graphicsFamily.has_value() && presentFamily.has_value();
+			return graphicsFamily.has_value() 
+				&& presentFamily.has_value() 
+				&& transferFamily.has_value();
 		}
 	};
 
@@ -356,10 +363,11 @@ private:
 		CreateRenderPass();
 		CreateGraphicsPipeline();
 		CreateFramebuffers();
-		CreateCommandPool();
+		CreateCommandPools();
 
 		CreateVertexBuffer();
-		CreateCommandBuffers();
+		CreateIndexBuffer();
+		CreateGraphicsCommandBuffers();
 		
 		CreateSyncObjects();
 	}
@@ -378,43 +386,169 @@ private:
 		throw std::runtime_error("failed to find suitable memory type!");
 	}
 
-	void CreateVertexBuffer() {
-		VkBufferCreateInfo bufferInfo {
-			VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,	// sType
-			nullptr,								// pnext
-			0,										// flags  // DEBUG: not a sparce buffer for now
-			sizeof(vertices[0]) * vertices.size(),	// size
-			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,		// usage
-			VK_SHARING_MODE_EXCLUSIVE,				// sharingMode // DEBUG: only used by the graphicsQueue for now
-			0,										// queueFamilyIndexCount
-			nullptr									// pQueueFamilyIndices
+	void CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, 
+		VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
+
+		QueueFamilyIndices indices = FindQueueFamilies(physicalDevice);
+		std::vector<uint32_t> queueFamilyIndices = {
+			indices.graphicsFamily.value(),
+			indices.transferFamily.value()
 		};
 
-		VkResult bufferResult = vkCreateBuffer(logicalDevice, &bufferInfo, nullptr, &vertexBuffer);
+		if (indices.presentFamily != indices.graphicsFamily) {
+			queueFamilyIndices.push_back(indices.presentFamily.value());
+		}
+
+		// DEBUG: exclusive is more performant but requires explicit
+		// transfer of resource ownership
+		VkBufferCreateInfo bufferInfo{
+			VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,				// sType
+			nullptr,											// pnext
+			0,													// flags  // DEBUG: not a sparce buffer for now
+			size,												// size
+			usage,												// usage
+			VK_SHARING_MODE_CONCURRENT,							// sharingMode // DEBUG: used by graphicsQueue and transferQueue
+			static_cast<uint32_t>(queueFamilyIndices.size()),	// queueFamilyIndexCount
+			queueFamilyIndices.data()							// pQueueFamilyIndices
+		};
+
+		VkResult bufferResult = vkCreateBuffer(logicalDevice, &bufferInfo, nullptr, &buffer);
 		if (bufferResult != VK_SUCCESS) {
 			throw std::runtime_error("failed to create vertex buffer!");
 		}
 
 		VkMemoryRequirements memRequirements;
-		vkGetBufferMemoryRequirements(logicalDevice, vertexBuffer, &memRequirements);
+		vkGetBufferMemoryRequirements(logicalDevice, buffer, &memRequirements);
 
-		uint32_t memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+		uint32_t memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties);
 
-		VkMemoryAllocateInfo allocInfo {
+		VkMemoryAllocateInfo allocInfo{
 			VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,		// sType
 			nullptr,									// pNext
 			memRequirements.size,						// allocationSize
 			memoryTypeIndex								// memoryTypeIndex
 		};
 
-		VkResult memoryResult = vkAllocateMemory(logicalDevice, &allocInfo, nullptr, &vertexBufferMemory);
+		// TODO (TF 6 FEB 2026): use an external memory allocator/manager to limit number of runtime allocations
+		// so it doesn't  hit the maxMemoryAllocationCount (ie: don't call vkAllocateMemory for every new buffer)
+		// ...this is only okay for now because its only a few allocations at startup
+		VkResult memoryResult = vkAllocateMemory(logicalDevice, &allocInfo, nullptr, &bufferMemory);
 		if (memoryResult != VK_SUCCESS) {
 			throw std::runtime_error("failed to allocate vertex buffer memory!");
 		}
 
 		// DEBUG: singlar vertex buffer and memory binding so offset is 0
-		vkBindBufferMemory(logicalDevice, vertexBuffer, vertexBufferMemory, 0);
+		vkBindBufferMemory(logicalDevice, buffer, bufferMemory, 0);
+	}
+
+	void CreateVertexBuffer() {
+		VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+
+		VkBuffer stagingBuffer;
+		VkDeviceMemory stagingBufferMemory;
+
+		CreateBuffer(bufferSize,
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			stagingBuffer,
+			stagingBufferMemory);
+
+		// copy vertex data from the host to space accessible to gpu as of the next vkQueueSubmit call
+		void* data;
+		vkMapMemory(logicalDevice, stagingBufferMemory, 0, bufferSize, 0, &data);
+		memcpy(data, vertices.data(), (size_t)bufferSize);
+		vkUnmapMemory(logicalDevice, stagingBufferMemory);
+
+		CreateBuffer(bufferSize,
+			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			vertexBuffer,
+			vertexBufferMemory);
+
+		CopyBuffer(stagingBuffer, vertexBuffer, bufferSize);
+
+		vkDestroyBuffer(logicalDevice, stagingBuffer, nullptr);
+		vkFreeMemory(logicalDevice, stagingBufferMemory, nullptr);
+	}
+
+	void CreateIndexBuffer() {
+		VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+
+		VkBuffer stagingBuffer;
+		VkDeviceMemory stagingBufferMemory;
+
+		CreateBuffer(bufferSize,
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			stagingBuffer,
+			stagingBufferMemory);
+
+		// copy index data from the host to space accessible to gpu as of the next vkQueueSubmit call
+		void* data;
+		vkMapMemory(logicalDevice, stagingBufferMemory, 0, bufferSize, 0, &data);
+		memcpy(data, indices.data(), (size_t)bufferSize);
+		vkUnmapMemory(logicalDevice, stagingBufferMemory);
+
+		CreateBuffer(bufferSize,
+			VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			indexBuffer,
+			indexBufferMemory);
+
+		CopyBuffer(stagingBuffer, indexBuffer, bufferSize);
+
+		vkDestroyBuffer(logicalDevice, stagingBuffer, nullptr);
+		vkFreeMemory(logicalDevice, stagingBufferMemory, nullptr);
+	}
+
+	void CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
+		VkCommandBufferAllocateInfo transferAllocInfo{
+			VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,		// sType
+			nullptr,											// pNext
+			transferCommandPool,								// commandPool
+			VK_COMMAND_BUFFER_LEVEL_PRIMARY,					// level
+			1													// commandBufferCount
+		};
+
+		VkCommandBuffer transferCommandBuffer;
+		VkResult transferAllocateResult = vkAllocateCommandBuffers(logicalDevice, &transferAllocInfo, &transferCommandBuffer);
+		if (transferAllocateResult != VK_SUCCESS) {
+			throw std::runtime_error("failed to allocate transfer command buffer!");
+		}
+
+		VkCommandBufferBeginInfo beginInfo {
+			VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,	// sType
+			nullptr,										// pNext
+			VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,	// flags // DEBUG: tell driver to wait until buffer copy is done before returning
+			nullptr											// pInheritanceInfo
+		};
+
+		vkBeginCommandBuffer(transferCommandBuffer, &beginInfo);
+
+		VkBufferCopy copyRegion {
+			0,			// srcOffset
+			0,			// dstOffset
+			size		// size
+		};
+
+		vkCmdCopyBuffer(transferCommandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+		vkEndCommandBuffer(transferCommandBuffer);
+
+		VkSubmitInfo submitInfo {
+			VK_STRUCTURE_TYPE_SUBMIT_INFO,		// sType
+			nullptr,							// pNext
+			0,									// waitSemaphoreCount
+			nullptr,							// pWaitSemaphores
+			nullptr,							// pWaitDstStageMask
+			1,									// commandBufferCount
+			&transferCommandBuffer,				// pCommandBuffers
+			0,									// signalSemaphoreCount
+			nullptr								// pSignalSemaphores
+		};
+
+		vkQueueSubmit(transferQueue, 1, &submitInfo, VK_NULL_HANDLE);
+		vkQueueWaitIdle(transferQueue); // TODO (TF 6 FEB 2026): use a fence or semaphore to sync more precisely (and allow parallel transfers)
+		vkFreeCommandBuffers(logicalDevice, transferCommandPool, 1, &transferCommandBuffer);
 	}
 
 	void CreateSyncObjects() {
@@ -456,37 +590,50 @@ private:
 		}
 	}
 
-	void CreateCommandBuffers() {
-		commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+	void CreateGraphicsCommandBuffers() {
+		graphicsCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 
 		// TODO (TF 5 FEB 2026): expierment with seconday command buffers
-		VkCommandBufferAllocateInfo allocInfo {
+		VkCommandBufferAllocateInfo graphicsAllocInfo {
 			VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,		// sType
 			nullptr,											// pNext
-			commandPool,										// commandPool
+			graphicsCommandPool,								// commandPool
 			VK_COMMAND_BUFFER_LEVEL_PRIMARY,					// level
-			static_cast<uint32_t>(commandBuffers.size())		// commandBufferCount
+			static_cast<uint32_t>(graphicsCommandBuffers.size())// commandBufferCount
 		};
 
-		VkResult result = vkAllocateCommandBuffers(logicalDevice, &allocInfo, commandBuffers.data());
-		if (result != VK_SUCCESS) {
-			throw std::runtime_error("failed to allocate command buffers!");
+		VkResult graphicsAllocateResult = vkAllocateCommandBuffers(logicalDevice, &graphicsAllocInfo, graphicsCommandBuffers.data());
+		if (graphicsAllocateResult != VK_SUCCESS) {
+			throw std::runtime_error("failed to allocate graphics command buffers!");
 		}
 	}
 
-	void CreateCommandPool() {
+	void CreateCommandPools() {
 		QueueFamilyIndices queueFamilyIndices = FindQueueFamilies(physicalDevice);
 
-		VkCommandPoolCreateInfo poolInfo {
+		VkCommandPoolCreateInfo graphicsPoolInfo {
 			VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,			// sType
 			nullptr,											// pNext
 			VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,	// flags
 			queueFamilyIndices.graphicsFamily.value()			// queueFamilyIndex
 		};
 
-		VkResult result = vkCreateCommandPool(logicalDevice, &poolInfo, nullptr, &commandPool);
-		if (result != VK_SUCCESS) {
-			throw std::runtime_error("failed to create command pool!");
+		VkResult graphicsPoolResult = vkCreateCommandPool(logicalDevice, &graphicsPoolInfo, nullptr, &graphicsCommandPool);
+		if (graphicsPoolResult != VK_SUCCESS) {
+			throw std::runtime_error("failed to create graphics command pool!");
+		}
+
+		VkCommandPoolCreateInfo transferPoolInfo {
+			VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,			// sType
+			nullptr,											// pNext
+			VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
+			| VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,				// flags // DEBUG: used for quick memory transfers from staging buffers
+			queueFamilyIndices.transferFamily.value()			// queueFamilyIndex
+		};
+
+		VkResult transferPoolResult = vkCreateCommandPool(logicalDevice, &transferPoolInfo, nullptr, &transferCommandPool);
+		if (transferPoolResult != VK_SUCCESS) {
+			throw std::runtime_error("failed to create transfer command pool!");
 		}
 	}
 
@@ -637,7 +784,6 @@ private:
 		auto bindingDescription = Vertex::GetBindingDescription(0); 
 		auto attributeDescription = Vertex::GetAttributeDescriptions(0, 0);
 
-
 		// TODO (TF 4 FEB 2026): use vertex and index buffers instead of hardcoding verticies in shaders
 		VkPipelineVertexInputStateCreateInfo vertexInputInfo{
 			VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,	// sType
@@ -645,7 +791,7 @@ private:
 			0,															// flags
 			1,															// vertexBindingDescriptionCount
 			&bindingDescription,										// pVertexBindingDescriptions
-			1,															// vertexAttributeDescriptionCount
+			static_cast<uint32_t>(attributeDescription.size()),			// vertexAttributeDescriptionCount
 			attributeDescription.data()									// pVertexAttributeDescriptions
 		};
 
@@ -892,43 +1038,36 @@ private:
 		}
 
 		QueueFamilyIndices indices = FindQueueFamilies(physicalDevice);
-		uint32_t queueFamilyIndices[] = {
+		std::vector<uint32_t> queueFamilyIndices = {
 			indices.graphicsFamily.value(),
-			indices.presentFamily.value()
+			indices.transferFamily.value()
 		};
 
-		// DEBUG: best performance option for sharing, 
-		// but **requires explicit sync/transfer of ownership**
-		VkSharingMode imageSharingMode = VK_SHARING_MODE_EXCLUSIVE; 
-		uint32_t queueFamilyIndexCount = 0;
-		uint32_t* pQueueFamilyIndices = nullptr;
-
-		// check if swapchain images cn be used across queue families
-		if (indices.graphicsFamily != indices.presentFamily) {
-			imageSharingMode = VK_SHARING_MODE_CONCURRENT;
-			queueFamilyIndexCount = 2;
-			pQueueFamilyIndices = queueFamilyIndices;
+		if (indices.presentFamily != indices.graphicsFamily) {
+			queueFamilyIndices.push_back(indices.presentFamily.value());
 		}
 
+		// DEBUG: exclusive is best performance option for sharing, 
+		// but **requires explicit sync/transfer of ownership**
 		VkSwapchainCreateInfoKHR createInfo {
-			VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,   // sType
-			nullptr,									   // pNext
-			0,											   // flags
-			surface,									   // surface
-			imageCount,									   // minImageCount
-			surfaceFormat.format,						   // imageFormat
-			surfaceFormat.colorSpace,					   // imageColorSpace
-			extent,										   // imageExtent
-			1,											   // imageArrayLayers // TODO (TF 3 FEB 2026): make more than 1 for stereoscopic 3D
-			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,		   // imageUsage // TODO (TF 3 FEB 2026): test VK_IMAGE_USAGE_TRANSFER_DST_BIT here for post-processing effects into the swapchain images
-			imageSharingMode,							   // imageSharingMode
-			queueFamilyIndexCount,						   // queueFamilyIndexCount
-			pQueueFamilyIndices,						   // pQueueFamilyIndices
-			swapChainSupport.capabilities.currentTransform,// preTransform // TODO (TF 3 FEB 2026): adapt this for rotated and/or flipped setups
-			VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,			   // compositeAlpha // DEBUG: opaque to avoid using alpha to blen with other windows
-			presentMode,								   // presentMode
-			VK_TRUE,									   // clipped // TODO (TF 3 FEB 2026): disable clipping to ensure pixels are readable even if another window obscures the application
-			VK_NULL_HANDLE								   // oldSwapChain // TODO (TF 3 FEB 2026): pass in the old/invalid swapchain if window is resized
+			VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,		// sType
+			nullptr,											// pNext
+			0,													// flags
+			surface,											// surface
+			imageCount,											// minImageCount
+			surfaceFormat.format,								// imageFormat
+			surfaceFormat.colorSpace,							// imageColorSpace
+			extent,												// imageExtent
+			1,													// imageArrayLayers // TODO (TF 3 FEB 2026): make more than 1 for stereoscopic 3D
+			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,				// imageUsage // TODO (TF 3 FEB 2026): test VK_IMAGE_USAGE_TRANSFER_DST_BIT here for post-processing effects into the swapchain images
+			VK_SHARING_MODE_CONCURRENT,							// imageSharingMode
+			static_cast<uint32_t>(queueFamilyIndices.size()),	// queueFamilyIndexCount
+			queueFamilyIndices.data(),							// pQueueFamilyIndices
+			swapChainSupport.capabilities.currentTransform,		// preTransform // TODO (TF 3 FEB 2026): adapt this for rotated and/or flipped setups
+			VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,					// compositeAlpha // DEBUG: opaque to avoid using alpha to blen with other windows
+			presentMode,										// presentMode
+			VK_TRUE,											// clipped // TODO (TF 3 FEB 2026): disable clipping to ensure pixels are readable even if another window obscures the application
+			VK_NULL_HANDLE										// oldSwapChain // TODO (TF 3 FEB 2026): pass in the old/invalid swapchain if window is resized
 		};
 
 		VkResult result = vkCreateSwapchainKHR(logicalDevice, &createInfo, nullptr, &swapChain);
@@ -1114,6 +1253,11 @@ private:
 				indices.presentFamily = queueFamilyIndex;
 			}
 
+			if ((queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0
+				&& (queueFamily.queueFlags & VK_QUEUE_TRANSFER_BIT)) {
+				indices.transferFamily = queueFamilyIndex;
+			}
+
 			if (indices.IsComplete()) {
 				break;
 			}
@@ -1199,7 +1343,8 @@ private:
 		std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
 		std::set<uint32_t> uniqueQueueFamilies = {
 			indices.graphicsFamily.value(),
-			indices.presentFamily.value()
+			indices.presentFamily.value(),
+			indices.transferFamily.value()
 		};
 
 		// DEBUG: this may result in a single VkDeviceQueueCreateInfo entry if
@@ -1256,6 +1401,7 @@ private:
 		// DEBUG: if only one queue family index was used for creation, then both handles will be identical
 		vkGetDeviceQueue(logicalDevice, indices.graphicsFamily.value(), defaultQueueIndex, &graphicsQueue);
 		vkGetDeviceQueue(logicalDevice, indices.presentFamily.value(), defaultQueueIndex, &presentQueue);
+		vkGetDeviceQueue(logicalDevice, indices.transferFamily.value(), defaultQueueIndex, &transferQueue);
 	}
 
 	void PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) {
@@ -1327,6 +1473,11 @@ private:
 		vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
+		VkBuffer vertexBuffers[] = { vertexBuffer };
+		VkDeviceSize offsets[] = { 0 };
+		vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+		vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+
 		// configure dynamic states (viewport and scissor)
 		VkViewport viewport {
 			0.0f,										// x
@@ -1344,7 +1495,7 @@ private:
 		};
 		vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-		vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+		vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 		vkCmdEndRenderPass(commandBuffer);
 
 		VkResult endBufferResult = vkEndCommandBuffer(commandBuffer);
@@ -1381,9 +1532,9 @@ private:
 		// only reset the fence once work can be submitted on the swapchain image
 		vkResetFences(logicalDevice, 1, &inFlightFences[currentFrame]);
 		
-		vkResetCommandBuffer(commandBuffers[currentFrame], 0); // TODO (TF 5 FEB 2026): experiment with releasing resources on rest
+		vkResetCommandBuffer(graphicsCommandBuffers[currentFrame], 0); // TODO (TF 5 FEB 2026): experiment with releasing resources on reset
 
-		RecordCommandBuffer(commandBuffers[currentFrame], imageIndex);
+		RecordCommandBuffer(graphicsCommandBuffers[currentFrame], imageIndex);
 
 		VkSemaphore waitSemaphores[] = {imageAvailableSemaphores[currentFrame]};
 
@@ -1395,15 +1546,15 @@ private:
 		VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
 
 		VkSubmitInfo submitInfo {
-			VK_STRUCTURE_TYPE_SUBMIT_INFO,		// sType
-			nullptr,							// pNext
-			1,									// waitSemaphoreCount
-			waitSemaphores,						// pWaitSemaphores
-			waitStages,							// pWaitDstStageMask	// TODO (TF 5 FEB 2026): experiment with other pipeline stage flags here
-			1,									// commandBufferCount
-			&commandBuffers[currentFrame],		// pCommandBuffers
-			1,									// signalSemaphoreCount
-			signalSemaphores					// pSignalSemaphores
+			VK_STRUCTURE_TYPE_SUBMIT_INFO,			// sType
+			nullptr,								// pNext
+			1,										// waitSemaphoreCount
+			waitSemaphores,							// pWaitSemaphores
+			waitStages,								// pWaitDstStageMask	// TODO (TF 5 FEB 2026): experiment with other pipeline stage flags here
+			1,										// commandBufferCount
+			&graphicsCommandBuffers[currentFrame],	// pCommandBuffers
+			1,										// signalSemaphoreCount
+			signalSemaphores						// pSignalSemaphores
 		};
 
 		VkResult submitResult = vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]);
@@ -1448,13 +1599,17 @@ private:
 		vkDestroyBuffer(logicalDevice, vertexBuffer, nullptr);
 		vkFreeMemory(logicalDevice, vertexBufferMemory, nullptr);
 
+		vkDestroyBuffer(logicalDevice, indexBuffer, nullptr);
+		vkFreeMemory(logicalDevice, indexBufferMemory, nullptr);
+
 		vkDestroyPipeline(logicalDevice, graphicsPipeline, nullptr);
 		vkDestroyPipelineLayout(logicalDevice, pipelineLayout, nullptr);
 
 		vkDestroyRenderPass(logicalDevice, renderPass, nullptr);
 		
 		// all command buffers are implicitly cleaned up when the command pool is destroyed
-		vkDestroyCommandPool(logicalDevice, commandPool, nullptr);
+		vkDestroyCommandPool(logicalDevice, graphicsCommandPool, nullptr);
+		vkDestroyCommandPool(logicalDevice, transferCommandPool, nullptr);
 
 		// device queues are implicitly cleaned up when the devices is destroyed
 		vkDestroyDevice(logicalDevice, nullptr);
@@ -1479,6 +1634,7 @@ private:
 	VkDevice logicalDevice;
 	VkQueue graphicsQueue;
 	VkQueue presentQueue;
+	VkQueue transferQueue;
 	uint32_t defaultQueueIndex = 0;
 	VkDebugUtilsMessengerEXT debugMessenger;
 	VkSurfaceKHR surface;
@@ -1495,8 +1651,9 @@ private:
 	VkPipeline graphicsPipeline;
 
 	std::vector<VkFramebuffer> swapChainFramebuffers;
-	VkCommandPool commandPool;
-	std::vector<VkCommandBuffer> commandBuffers;
+	VkCommandPool graphicsCommandPool;
+	VkCommandPool transferCommandPool;
+	std::vector<VkCommandBuffer> graphicsCommandBuffers;
 
 	std::vector<VkSemaphore> imageAvailableSemaphores;
 	std::vector<VkSemaphore> renderFinishedSemaphores;
@@ -1504,6 +1661,8 @@ private:
 
 	VkBuffer vertexBuffer;
 	VkDeviceMemory vertexBufferMemory;
+	VkBuffer indexBuffer;
+	VkDeviceMemory indexBufferMemory;
 
 	uint32_t currentFrame = 0;
 	bool framebufferResized = false;
