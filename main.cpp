@@ -27,12 +27,18 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/hash.hpp>
 #include <array>
 
 #include <chrono>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
+#include <unordered_map>
 
 struct UniformBufferObject {
 	alignas(16) glm::mat4 model;
@@ -44,6 +50,12 @@ struct Vertex {
 	glm::vec3 pos;
 	glm::vec3 color;
 	glm::vec2 texCoord;
+
+	bool operator==(const Vertex& other) const {
+		return pos == other.pos
+			&& color == other.color
+			&& texCoord == other.texCoord;
+	}
 
 	// TODO (TF 6 FEB 2026): pass in binding == 0 to indicate the singlar vertex buffer binding's index
 	static VkVertexInputBindingDescription GetBindingDescription(uint32_t binding) {
@@ -79,29 +91,27 @@ struct Vertex {
 
 		return attributeDescriptions;
 	}
-
 };
 
-const std::vector<Vertex> vertices = {
-	{{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0, 0.0f}, {0.0f, 0.0f}},
-	{{0.5f, -0.5f, 0.0f}, {0.0f, 1.0, 0.0f}, {1.0f, 0.0f}},
-	{{0.5f, 0.5f, 0.0f}, {0.0f, 0.0, 1.0f}, {1.0f, 1.0f}},
-	{{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0, 1.0f}, {0.0f, 1.0f}},
-
-	{{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0, 0.0f}, {0.0f, 0.0f}},
-	{{0.5f, -0.5f, -0.5f}, {0.0f, 1.0, 0.0f}, {1.0f, 0.0f}},
-	{{0.5f, 0.5f, -0.5f}, {0.0f, 0.0, 1.0f}, {1.0f, 1.0f}},
-	{{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0, 1.0f}, {0.0f, 1.0f}}
-};
-
-const std::vector<uint16_t> indices = {
-	0, 1, 2, 2, 3, 0,
-	4, 5, 6, 6, 7, 4
-};
+// https://en.cppreference.com/w/cpp/utility/hash.html
+namespace std {
+	template<>
+	struct hash<Vertex> {
+		size_t operator()(Vertex const& vertex) const {
+			return ((hash<glm::vec3>()(vertex.pos) ^
+				(hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^
+				(hash<glm::vec2>()(vertex.texCoord) << 1);
+ 		}
+	};
+}
 
 const uint32_t WINDOW_WIDTH = 800;
 const uint32_t WINDOW_HEIGHT = 600;
 const int MAX_FRAMES_IN_FLIGHT = 2;
+
+const std::string TEST_TEXTURE_PATH = "Textures/texture.jpg";
+const std::string MODEL_PATH = "Models/viking_room.obj";
+const std::string MODEL_TEXTURE_PATH = "Textures/viking_room.png";
 
 const std::vector<const char*> VALIDATION_LAYERS = {
 	"VK_LAYER_KHRONOS_validation"
@@ -372,6 +382,26 @@ private:
 		}
 	}
 
+	// DEBUG: used with 2D test texture
+	void PopulateTestVerticies() {
+		vertices = {
+			{{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0, 0.0f}, {0.0f, 0.0f}},
+			{{0.5f, -0.5f, 0.0f}, {0.0f, 1.0, 0.0f}, {1.0f, 0.0f}},
+			{{0.5f, 0.5f, 0.0f}, {0.0f, 0.0, 1.0f}, {1.0f, 1.0f}},
+			{{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0, 1.0f}, {0.0f, 1.0f}},
+
+			{{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0, 0.0f}, {0.0f, 0.0f}},
+			{{0.5f, -0.5f, -0.5f}, {0.0f, 1.0, 0.0f}, {1.0f, 0.0f}},
+			{{0.5f, 0.5f, -0.5f}, {0.0f, 0.0, 1.0f}, {1.0f, 1.0f}},
+			{{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0, 1.0f}, {0.0f, 1.0f}}
+		};
+
+		indices = {
+			0, 1, 2, 2, 3, 0,
+			4, 5, 6, 6, 7, 4
+		};
+	}
+
 	void InitVulkan() {
 		CreateInstance();
 		SetupDebugMessenger();
@@ -394,9 +424,11 @@ private:
 		CreateDepthResources();
 		CreateFramebuffers(); // DEBUG: relies on depthImageView
 
-		CreateTextureImage();
+		CreateTextureImage(MODEL_TEXTURE_PATH.c_str());
 		CreateTextureImageView();
 		CreateTextureSampler();
+
+		LoadModel();
 		CreateVertexBuffer();
 		CreateIndexBuffer();
 
@@ -406,6 +438,53 @@ private:
 		CreateGraphicsCommandBuffers();
 		
 		CreateSyncObjects();
+	}
+
+	void LoadModel() {
+		tinyobj::attrib_t attrib;
+		std::vector<tinyobj::shape_t> shapes;
+		std::vector<tinyobj::material_t> materials;
+		std::string warn;
+		std::string err;
+
+		// DEBUG: triangulation enabled by default
+		bool success = tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, MODEL_PATH.c_str());
+		if (!success) {
+			throw std::runtime_error(err);
+		}
+
+		std::unordered_map<Vertex, uint32_t> uniqueVertices{};
+		for (const auto& shape : shapes) {
+			for (const auto& index : shape.mesh.indices) {
+				Vertex vertex{};
+
+				// DEBUG: tinyobj verticies array is raw floats,
+				// so multiply by 3 (2, etc) is necessary to get the correct vertex_index (etc) attribute
+				vertex.pos = {
+					attrib.vertices[3 * index.vertex_index + 0],
+					attrib.vertices[3 * index.vertex_index + 1],
+					attrib.vertices[3 * index.vertex_index + 2]
+				};
+
+				// flip y-axis to match vulkan's 0 == top of image system (obj setup for openGL 0 == bottom)
+				vertex.texCoord = {
+					attrib.texcoords[2 * index.texcoord_index + 0],
+					1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
+				};
+
+				vertex.color = { 1.0f, 1.0f, 1.0f };
+
+				if (uniqueVertices.count(vertex) == 0) {
+					uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
+					vertices.push_back(vertex);
+				}
+
+				// DEBUG: pick out the unique verticies and index triangles accordingly
+				indices.push_back(uniqueVertices[vertex]);
+				//vertices.push_back(vertex);
+				//indices.push_back(indices.size());
+			}
+		}
 	}
 
 	VkFormat FindSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features) {
@@ -596,12 +675,12 @@ private:
 		vkBindImageMemory(logicalDevice, image, textureImageMemory, 0);
 	}
 
-	void CreateTextureImage() {
+	void CreateTextureImage(const char* path) {
 		int texWidth;
 		int texHeight;
 		int texChannels;
 
-		stbi_uc* pixels = stbi_load("Textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+		stbi_uc* pixels = stbi_load(path, &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
 		VkDeviceSize imageSize = texWidth * texHeight * 4;
 
 		if (pixels == nullptr) {
@@ -2051,7 +2130,7 @@ private:
 		VkBuffer vertexBuffers[] = { vertexBuffer };
 		VkDeviceSize offsets[] = { 0 };
 		vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-		vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+		vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
 		// configure dynamic states (viewport and scissor)
 		VkViewport viewport {
@@ -2234,6 +2313,7 @@ private:
 		vkDestroyCommandPool(logicalDevice, graphicsCommandPool, nullptr);
 		vkDestroyCommandPool(logicalDevice, transferCommandPool, nullptr);
 
+		// FIXME (TF 10 FEB 2026): in debug build mode not all VkDeviceMemory is freed before the Device is destroyed
 		// device queues are implicitly cleaned up when the devices is destroyed
 		vkDestroyDevice(logicalDevice, nullptr);
 
@@ -2285,6 +2365,8 @@ private:
 	std::vector<VkSemaphore> renderFinishedSemaphores;
 	std::vector<VkFence> inFlightFences;
 
+	std::vector<Vertex> vertices;
+	std::vector<uint32_t> indices;
 	VkBuffer vertexBuffer;
 	VkDeviceMemory vertexBufferMemory;
 	VkBuffer indexBuffer;
