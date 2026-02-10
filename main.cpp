@@ -525,19 +525,21 @@ private:
 
 	void CreateDepthResources() {
 		VkFormat depthFormat = FindDepthFormat();
-		CreateImage(swapChainExtent.width, swapChainExtent.height, depthFormat,
+		CreateImage(swapChainExtent.width, swapChainExtent.height, 
+					1, 
+					depthFormat,
 					VK_IMAGE_TILING_OPTIMAL,
 					VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
 					VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 					depthImage,
 					depthImageMemory);
 
-		depthImageView = CreateImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+		depthImageView = CreateImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
 
 		// DEBUG: TransitionImageLayout() is not used here
 		// to transition from UNDEFINED to DEPTH_STENCIL_ATTACHMENT_OPTIMAL
 		// because the transition is implicitly handled in the renderpass setup
-		//TransitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+		//TransitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 1);
 	}
 
 	void CreateTextureSampler() {
@@ -560,8 +562,8 @@ private:
 			maxAnisotropy,								// maxAnisotropy
 			VK_FALSE,									// compareEnable
 			VK_COMPARE_OP_ALWAYS,						// compareOp
-			0.0f,										// minLod
-			0.0f,										// maxLod
+			0.0f,										// minLod // TODO (TF 10 FEB 2026): test static_cast<float>(mipLevels / 2)
+			VK_LOD_CLAMP_NONE,							// maxLod
 			VK_BORDER_COLOR_INT_OPAQUE_BLACK,			// borderColor
 			VK_FALSE									// unnormalizedCoordinates
 		};
@@ -572,7 +574,7 @@ private:
 		}
 	}
 
-	VkImageView CreateImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags) {
+	VkImageView CreateImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, uint32_t mipLevels) {
 		VkComponentMapping componentMapping {
 			VK_COMPONENT_SWIZZLE_IDENTITY, // r
 			VK_COMPONENT_SWIZZLE_IDENTITY, // g
@@ -581,9 +583,9 @@ private:
 		};
 
 		VkImageSubresourceRange subresourceRange{
-			aspectFlags,				// aspectMask // TODO (TF 3 FEB 2026): experiment with Depth and Stencil aspects for views
+			aspectFlags,				// aspectMask
 			0,							// baseMipLevel
-			1,							// levelCount // TODO (TF 3 FEB 2026): experiment with variable mip levels
+			mipLevels,					// levelCount
 			0,							// baseArraylayer
 			1							// layerCount // TODO (TF 3 FEB 2026): experiment with multiple layers for stereoscopic 3D application
 		};
@@ -609,11 +611,11 @@ private:
 	}
 
 	void CreateTextureImageView() {
-		textureImageView = CreateImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT);
+		textureImageView = CreateImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels);
 	}
 
 	// creates a concurrent shared 2D image of depth == 1 extent
-	void CreateImage(uint32_t width, uint32_t height, VkFormat format, 
+	void CreateImage(uint32_t width, uint32_t height, uint32_t mipLevels, VkFormat format, 
 					VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags memoryPropertyFlags,
 					VkImage& image, VkDeviceMemory& imageMemory) {
 		//QueueFamilyIndices indices = FindQueueFamilies(physicalDevice);
@@ -632,14 +634,14 @@ private:
 			1		// depth
 		};
 
-		VkImageCreateInfo imageInfo{
+		VkImageCreateInfo imageInfo {
 			VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,				// sType
 			nullptr,											// pNext
 			0,													// flags // TODO (TF 9 FEB 2026): experiment with sparse image flags to avoid need for entire image to be memory-backed (eg: 3D voxel grid with air)
 			VK_IMAGE_TYPE_2D,									// imageType
 			format,												// format // TODO (TF 9 FEB 2026): account for device not supporting this/that format and react (don't crash)
 			imageExtent,										// extent
-			1,													// mipLevels
+			mipLevels,											// mipLevels
 			1,													// arrayLayers
 			VK_SAMPLE_COUNT_1_BIT,								// samples
 			tiling,												// tiling
@@ -672,7 +674,137 @@ private:
 			throw std::runtime_error("failed to allocate image memory!");
 		}
 
+		// FIXME (TF 10 FEB 2026): the textureImageMemory is not being freed before the vkDestroyDevice(logicalDevice) is called (possible race condition)
 		vkBindImageMemory(logicalDevice, image, textureImageMemory, 0);
+		std::cout << "CREATING textureImageMemory: 0x" << std::hex << reinterpret_cast<uint64_t>(textureImageMemory) << std::dec << std::endl;
+	}
+
+	// IMPORTANT NOTES:
+	// -> Mipmaps should be generated offline and stored in the texture tile alongside the base mip level, for best performance.
+	// -> if runtime mip generation is necessary, but no format can be found which supports linear blitting,
+	//		then generate mip levels in software (eg: stb_image_resize https://github.com/nothings/stb/tree/master)
+	//		and load each mip level into the image the same way the base level texture is loaded.
+	void GenerateMipMaps(VkImage image, VkFormat imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels) {
+		// check if the optimal tiling formatted image supports linear blitting
+		VkFormatProperties formatProperties;
+		vkGetPhysicalDeviceFormatProperties(physicalDevice, imageFormat, &formatProperties);
+
+		if (!(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
+			throw std::runtime_error("texture image format does not support linear blitting!");
+		}
+		
+		VkCommandBuffer oneTimeCommandBuffer = BeginSingleTimeCommands(graphicsCommandPool);
+
+		VkImageSubresourceRange subResourceRange {
+			VK_IMAGE_ASPECT_COLOR_BIT,		// aspectMask 
+			0,								// baseMipLevel
+			1,								// levelCount
+			0,								// baseArraylayer
+			1								// layerCount
+		};
+
+		VkImageMemoryBarrier barrier {
+			VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,		// sType
+			nullptr,									// pNext
+			0,											// srcAccessMask 
+			0,											// dstAccessMask
+			VK_IMAGE_LAYOUT_UNDEFINED,					// oldLayout
+			VK_IMAGE_LAYOUT_UNDEFINED,					// newLayout
+			VK_QUEUE_FAMILY_IGNORED,					// srcQueueFamilyIndex // FIXME: using transferQueue
+			VK_QUEUE_FAMILY_IGNORED,					// dstQueueFamilyIndex // FIXME: using transferQueue
+			image,										// image
+			subResourceRange							// subresourceRange
+		};
+
+		int32_t mipWidth = texWidth;
+		int32_t mipHeight = texHeight;
+
+		for (uint32_t i = 1; i < mipLevels; ++i) {
+			barrier.subresourceRange.baseMipLevel = i - 1;
+			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+			barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+			vkCmdPipelineBarrier(oneTimeCommandBuffer,		// commandBuffer
+				VK_PIPELINE_STAGE_TRANSFER_BIT,				// srcStageMask
+				VK_PIPELINE_STAGE_TRANSFER_BIT,				// dstStageMask
+				0,											// dependencyFlags
+				0,											// memoryBarrierCount
+				nullptr,									// pMemoryBarriers
+				0,											// bufferMemoryBarrierCount
+				nullptr,									// pBufferMemoryBarriers
+				1,											// imageMemoryBarrierCount
+				&barrier									// pImageMemoryBarriers
+			);
+
+			VkImageSubresourceLayers srcSubresourceLayers {
+				VK_IMAGE_ASPECT_COLOR_BIT,	// aspectMask
+				i - 1,						// mipLevel
+				0,							// baseArrayLayer
+				1							// layerCount
+			};
+
+			VkImageSubresourceLayers dstSubresourceLayers {
+				VK_IMAGE_ASPECT_COLOR_BIT,
+				i,
+				0,
+				1
+			};
+
+			VkImageBlit blit {
+				srcSubresourceLayers,								// srcSubresource
+				{{0, 0, 0}, {mipWidth, mipHeight, 1}},				// srcOffsets[2]
+				dstSubresourceLayers,								// dstSubresource
+				{{ 0, 0, 0 }, {mipWidth > 1 ? mipWidth / 2 : 1,
+							   mipHeight > 1 ? mipHeight / 2 : 1,
+								1}}	// dstOffsets[2]
+			};
+
+			// DEBUG: vkCmdBlitImage is not supported on all platforms (image format must support linear filtering)
+			vkCmdBlitImage(oneTimeCommandBuffer,
+				image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+				image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				1, &blit,
+				VK_FILTER_LINEAR);
+
+			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+			barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+			vkCmdPipelineBarrier(oneTimeCommandBuffer,
+				VK_PIPELINE_STAGE_TRANSFER_BIT,
+				VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+				0,
+				0, nullptr,
+				0, nullptr,
+				1, &barrier);
+
+			if (mipWidth > 1) {
+				mipWidth /= 2;
+			}
+
+			if (mipHeight > 1) {
+				mipHeight /= 2;
+			}
+		}
+
+		barrier.subresourceRange.baseMipLevel = mipLevels - 1;
+		barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+		barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+		vkCmdPipelineBarrier(oneTimeCommandBuffer,
+			VK_PIPELINE_STAGE_TRANSFER_BIT,
+			VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+			0,
+			0, nullptr,
+			0, nullptr,
+			1, &barrier);
+
+		EndSingleTimeCommands(graphicsQueue, graphicsCommandPool, oneTimeCommandBuffer);
 	}
 
 	void CreateTextureImage(const char* path) {
@@ -687,9 +819,12 @@ private:
 			throw std::runtime_error("failed to load texture image!");
 		}
 		
+		mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
+		
 		VkBuffer stagingBuffer;
 		VkDeviceMemory stagingBufferMemory;
 
+		std::cout << "CREATING stagingBufferMemory (for textureImage): ";
 		CreateBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 								VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
 								| VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -703,9 +838,10 @@ private:
 		stbi_image_free(pixels);
 		
 		CreateImage(texWidth, texHeight, 
+					mipLevels,
 					VK_FORMAT_R8G8B8A8_SRGB, 
 					VK_IMAGE_TILING_OPTIMAL, 
-					VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+					VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
 					VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 					textureImage,
 					textureImageMemory);
@@ -713,16 +849,19 @@ private:
 		TransitionImageLayout(textureImage, 
 			VK_FORMAT_R8G8B8A8_SRGB, 
 			VK_IMAGE_LAYOUT_UNDEFINED, 
-			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			mipLevels
 		);
 
 		CopyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
 	
-		TransitionImageLayout(textureImage,
-			VK_FORMAT_R8G8B8A8_SRGB,
-			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-		);
+		//TransitionImageLayout(textureImage,
+		//	VK_FORMAT_R8G8B8A8_SRGB,
+		//	VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		//	VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		//	mipLevels
+		//);
+		GenerateMipMaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
 
 		vkDestroyBuffer(logicalDevice, stagingBuffer, nullptr);
 		vkFreeMemory(logicalDevice, stagingBufferMemory, nullptr);
@@ -836,6 +975,7 @@ private:
 		uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
 
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+			std::cout << "CREATING mapped uniformBuffersMemory[" << i << "]: ";
 			CreateBuffer(bufferSize,
 						 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 						 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
@@ -950,6 +1090,7 @@ private:
 
 		// DEBUG: singlar vertex buffer and memory binding so offset is 0
 		vkBindBufferMemory(logicalDevice, buffer, bufferMemory, 0);
+		std::cout << "0x" << std::hex << reinterpret_cast<uint64_t>(bufferMemory) << std::dec << std::endl;
 	}
 
 	void CreateVertexBuffer() {
@@ -958,6 +1099,7 @@ private:
 		VkBuffer stagingBuffer;
 		VkDeviceMemory stagingBufferMemory;
 
+		std::cout << "CREATING stagingBufferMemory (for vertexBuffer): ";
 		CreateBuffer(bufferSize,
 			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -970,6 +1112,7 @@ private:
 		memcpy(data, vertices.data(), (size_t)bufferSize);
 		vkUnmapMemory(logicalDevice, stagingBufferMemory);
 
+		std::cout << "CREATING vertexBufferMemory: ";
 		CreateBuffer(bufferSize,
 			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -988,6 +1131,7 @@ private:
 		VkBuffer stagingBuffer;
 		VkDeviceMemory stagingBufferMemory;
 
+		std::cout << "CREATING stagingBufferMemory (for indexBuffer): ";
 		CreateBuffer(bufferSize,
 			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -1000,6 +1144,7 @@ private:
 		memcpy(data, indices.data(), (size_t)bufferSize);
 		vkUnmapMemory(logicalDevice, stagingBufferMemory);
 
+		std::cout << "CREATING indexBufferMemory: ";
 		CreateBuffer(bufferSize,
 			VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -1061,7 +1206,7 @@ private:
 		vkFreeCommandBuffers(logicalDevice, commandPool, 1, &commandBuffer);
 	}
 
-	void TransitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout) {
+	void TransitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, uint32_t mipLevels) {
 		VkCommandBuffer oneTimeCommandBuffer = BeginSingleTimeCommands(graphicsCommandPool); // DEBUG: must use graphicsCommandPool because it can support TRANSFER_BIT and FRAGMENT_BIT image transition commands
 
 		VkAccessFlags sourceAccessMask;
@@ -1107,12 +1252,13 @@ private:
 		VkImageSubresourceRange subResourceRange {
 			aspectFlags,					// aspectMask // TODO (TF 9 FEB 2026): experiment with other aspectMask values (stencil, depth, etc)
 			0,								// baseMipLevel
-			1,								// levelCount
+			mipLevels,						// levelCount
 			0,								// baseArraylayer
 			1								// layerCount
 		};
 
-		QueueFamilyIndices indices = FindQueueFamilies(physicalDevice);
+		// FIXME (? TF 10 FEB 2026): use src/dst QueueFamilyIndex to transfer ownership as needed (using 2+ queues)
+		//QueueFamilyIndices indices = FindQueueFamilies(physicalDevice);
 
 		VkImageMemoryBarrier barrier {
 			VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,		// sType
@@ -1764,7 +1910,7 @@ private:
 		swapChainImageViews.resize(swapChainImages.size());
 
 		for (size_t i = 0; i < swapChainImages.size(); ++i) {
-			swapChainImageViews[i] = CreateImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+			swapChainImageViews[i] = CreateImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 		}
 	}
 
@@ -2280,6 +2426,10 @@ private:
 	}
 
 	void Cleanup() {
+		// DEBUG: wait to ensure no objects are in use
+		// or commands are being executed before attempting to free handles and bound memory
+		//vkDeviceWaitIdle(logicalDevice); // not helping...
+
 		CleanupSwapChain();
 
 		vkDestroySampler(logicalDevice, textureSampler, nullptr);
@@ -2312,6 +2462,7 @@ private:
 		// all command buffers are implicitly cleaned up when the command pool is destroyed
 		vkDestroyCommandPool(logicalDevice, graphicsCommandPool, nullptr);
 		vkDestroyCommandPool(logicalDevice, transferCommandPool, nullptr);
+
 
 		// FIXME (TF 10 FEB 2026): in debug build mode not all VkDeviceMemory is freed before the Device is destroyed
 		// device queues are implicitly cleaned up when the devices is destroyed
@@ -2376,6 +2527,7 @@ private:
 	std::vector<VkDeviceMemory> uniformBuffersMemory; // FIXME (TF 8 FEB 2026): use a single block of memory for all buffers
 	std::vector<void*> uniformBuffersMapped;
 
+	uint32_t mipLevels;
 	VkImage textureImage;
 	VkDeviceMemory textureImageMemory;
 	VkImageView textureImageView;
