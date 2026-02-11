@@ -421,6 +421,7 @@ private:
 		CreateGraphicsPipeline();
 		CreateCommandPools();
 
+		CreateColorResources();
 		CreateDepthResources();
 		CreateFramebuffers(); // DEBUG: relies on depthImageView
 
@@ -438,6 +439,39 @@ private:
 		CreateGraphicsCommandBuffers();
 		
 		CreateSyncObjects();
+	}
+
+	void CreateColorResources() {
+		VkFormat colorFormat = swapChainImageFormat;
+
+		std::cout << "CREATING colorImageMemory: 0x";
+		CreateImage(swapChainExtent.width, 
+					swapChainExtent.height, 
+					1, msaaSamples, 
+					colorFormat,
+					VK_IMAGE_TILING_OPTIMAL,
+					VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT
+					| VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+					VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+					colorImage,
+					colorImageMemory);
+		colorImageView = CreateImageView(colorImage, colorFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+	}
+
+	VkSampleCountFlagBits GetMaxUsableSampleCount() {
+		VkPhysicalDeviceProperties physicalDeviceProperties;
+		vkGetPhysicalDeviceProperties(physicalDevice, &physicalDeviceProperties);
+
+		VkSampleCountFlags counts = physicalDeviceProperties.limits.framebufferColorSampleCounts
+									& physicalDeviceProperties.limits.framebufferDepthSampleCounts;
+		if (counts & VK_SAMPLE_COUNT_64_BIT) { return VK_SAMPLE_COUNT_64_BIT; }
+		if (counts & VK_SAMPLE_COUNT_32_BIT) { return VK_SAMPLE_COUNT_32_BIT; }
+		if (counts & VK_SAMPLE_COUNT_16_BIT) { return VK_SAMPLE_COUNT_16_BIT; }
+		if (counts & VK_SAMPLE_COUNT_8_BIT) { return VK_SAMPLE_COUNT_8_BIT; }
+		if (counts & VK_SAMPLE_COUNT_4_BIT) { return VK_SAMPLE_COUNT_4_BIT; }
+		if (counts & VK_SAMPLE_COUNT_2_BIT) { return VK_SAMPLE_COUNT_2_BIT; }
+
+		return VK_SAMPLE_COUNT_1_BIT;
 	}
 
 	void LoadModel() {
@@ -525,8 +559,10 @@ private:
 
 	void CreateDepthResources() {
 		VkFormat depthFormat = FindDepthFormat();
+
+		std::cout << "CREATING depthImageMemory: 0x";
 		CreateImage(swapChainExtent.width, swapChainExtent.height, 
-					1, 
+					1, msaaSamples,
 					depthFormat,
 					VK_IMAGE_TILING_OPTIMAL,
 					VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
@@ -615,7 +651,8 @@ private:
 	}
 
 	// creates a concurrent shared 2D image of depth == 1 extent
-	void CreateImage(uint32_t width, uint32_t height, uint32_t mipLevels, VkFormat format, 
+	void CreateImage(uint32_t width, uint32_t height, uint32_t mipLevels, 
+					VkSampleCountFlagBits numSamples, VkFormat format, 
 					VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags memoryPropertyFlags,
 					VkImage& image, VkDeviceMemory& imageMemory) {
 		//QueueFamilyIndices indices = FindQueueFamilies(physicalDevice);
@@ -643,7 +680,7 @@ private:
 			imageExtent,										// extent
 			mipLevels,											// mipLevels
 			1,													// arrayLayers
-			VK_SAMPLE_COUNT_1_BIT,								// samples
+			numSamples,											// samples
 			tiling,												// tiling
 			usage,												// usage
 			VK_SHARING_MODE_EXCLUSIVE,							// sharingMode
@@ -669,14 +706,13 @@ private:
 			memoryTypeIndex
 		};
 
-		VkResult memoryAllocResult = vkAllocateMemory(logicalDevice, &allocInfo, nullptr, &textureImageMemory);
+		VkResult memoryAllocResult = vkAllocateMemory(logicalDevice, &allocInfo, nullptr, &imageMemory);
 		if (memoryAllocResult != VK_SUCCESS) {
 			throw std::runtime_error("failed to allocate image memory!");
 		}
 
-		// FIXME (TF 10 FEB 2026): the textureImageMemory is not being freed before the vkDestroyDevice(logicalDevice) is called (possible race condition)
-		vkBindImageMemory(logicalDevice, image, textureImageMemory, 0);
-		std::cout << "CREATING textureImageMemory: 0x" << std::hex << reinterpret_cast<uint64_t>(textureImageMemory) << std::dec << std::endl;
+		vkBindImageMemory(logicalDevice, image, imageMemory, 0);
+		std::cout << std::hex << reinterpret_cast<uint64_t>(imageMemory) << std::dec << std::endl;
 	}
 
 	// IMPORTANT NOTES:
@@ -837,8 +873,9 @@ private:
 		vkUnmapMemory(logicalDevice, stagingBufferMemory);
 		stbi_image_free(pixels);
 		
+		std::cout << "CREATING textureImageMemory: 0x";
 		CreateImage(texWidth, texHeight, 
-					mipLevels,
+					mipLevels, VK_SAMPLE_COUNT_1_BIT,
 					VK_FORMAT_R8G8B8A8_SRGB, 
 					VK_IMAGE_TILING_OPTIMAL, 
 					VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -1428,9 +1465,10 @@ private:
 		swapChainFramebuffers.resize(swapChainImageViews.size());
 
 		for (size_t i = 0; i < swapChainImageViews.size(); ++i) {
-			std::array<VkImageView, 2> attachments = {
-				swapChainImageViews[i],
-				depthImageView // DEBUG: only one subpass is running at a time due to semaphore usage, so depthImageView can be reused
+			std::array<VkImageView, 3> attachments = {
+				colorImageView, // DEBUG; only one subpass is running at a time due to semaphore usage, so colorImageView, and depthImageView can be reused for each swapChainImageView
+				depthImageView,
+				swapChainImageViews[i]
 			};
 
 			VkFramebufferCreateInfo framebufferInfo {
@@ -1454,21 +1492,33 @@ private:
 
 	void CreateRenderPass() {
 		VkAttachmentDescription colorAttachment {
-			0,									// flags
-			swapChainImageFormat,				// format
-			VK_SAMPLE_COUNT_1_BIT,				// samples
-			VK_ATTACHMENT_LOAD_OP_CLEAR,		// loadOp // TODO (TF 4 FEB 2026): experiment with not clearning the image before rendering to it
-			VK_ATTACHMENT_STORE_OP_STORE,		// storeOp
-			VK_ATTACHMENT_LOAD_OP_DONT_CARE,	// stencilLoadOp
-			VK_ATTACHMENT_STORE_OP_DONT_CARE,	// stencilStoreOp
-			VK_IMAGE_LAYOUT_UNDEFINED,			// initialLayout
-			VK_IMAGE_LAYOUT_PRESENT_SRC_KHR		// finalLayout // TODO (TF 4 FEB 2026): experiment with VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL for memory copy instead of presentation
+			0,												// flags
+			swapChainImageFormat,							// format
+			msaaSamples,									// samples
+			VK_ATTACHMENT_LOAD_OP_CLEAR,					// loadOp // TODO (TF 4 FEB 2026): experiment with not clearning the image before rendering to it
+			VK_ATTACHMENT_STORE_OP_STORE,					// storeOp
+			VK_ATTACHMENT_LOAD_OP_DONT_CARE,				// stencilLoadOp
+			VK_ATTACHMENT_STORE_OP_DONT_CARE,				// stencilStoreOp
+			VK_IMAGE_LAYOUT_UNDEFINED,						// initialLayout
+			VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL		// finalLayout
+		};
+
+		VkAttachmentDescription colorAttachmentResolve {
+			0,												// flags
+			swapChainImageFormat,							// format
+			VK_SAMPLE_COUNT_1_BIT,							// samples
+			VK_ATTACHMENT_LOAD_OP_DONT_CARE,				// loadOp 
+			VK_ATTACHMENT_STORE_OP_STORE,					// storeOp
+			VK_ATTACHMENT_LOAD_OP_DONT_CARE,				// stencilLoadOp
+			VK_ATTACHMENT_STORE_OP_DONT_CARE,				// stencilStoreOp
+			VK_IMAGE_LAYOUT_UNDEFINED,						// initialLayout
+			VK_IMAGE_LAYOUT_PRESENT_SRC_KHR					// finalLayout 
 		};
 
 		VkAttachmentDescription depthAttachment {
 			0,												// flags
 			FindDepthFormat(),								// format
-			VK_SAMPLE_COUNT_1_BIT,							// samples
+			msaaSamples,									// samples
 			VK_ATTACHMENT_LOAD_OP_CLEAR,					// loadOp 
 			VK_ATTACHMENT_STORE_OP_DONT_CARE,				// storeOp
 			VK_ATTACHMENT_LOAD_OP_DONT_CARE,				// stencilLoadOp
@@ -1483,8 +1533,13 @@ private:
 		};
 
 		VkAttachmentReference depthAttachmentRef {
-			1,													// attachment DEBUG: aka the index referenced in "layout(location = 0) out vec4 outColor" of a shader
+			1,													// attachment
 			VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL	// layout
+		};
+
+		VkAttachmentReference colorAttachmentResolveRef {
+			2,											// attachment
+			VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL	// layout
 		};
 
 		// TODO (TF 4 FEB 2026): experiment with input, resolve, depthStencil, and preserve attachments
@@ -1495,7 +1550,7 @@ private:
 			nullptr,							// pInputAttachments
 			1,									// colorAttachmentCount
 			&colorAttachmentRef,				// pColorAttachments
-			nullptr,							// pResolveAttachments // matches the number in colorAttachmentCount (for mulitsampling)
+			&colorAttachmentResolveRef,			// pResolveAttachments // matches the number in colorAttachmentCount (for mulitsampling)
 			&depthAttachmentRef,				// pDepthStencilAttachment // only one
 			0,									// preserveAttachmentCount
 			nullptr								// pPreserveAttachments
@@ -1512,7 +1567,8 @@ private:
 			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
 			| VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,		// dstStageMask
 
-			VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,		// srcAccessMask
+			VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+			| VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,				// srcAccessMask
 
 			VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
 			| VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,		// dstAccessmask
@@ -1520,9 +1576,10 @@ private:
 			0													// dependencyFlags
 		};
 
-		std::array<VkAttachmentDescription, 2> attachments = {
+		std::array<VkAttachmentDescription, 3> attachments = {
 			colorAttachment,
-			depthAttachment
+			depthAttachment,
+			colorAttachmentResolve
 		};
 
 		VkRenderPassCreateInfo renderPassInfo {
@@ -1675,14 +1732,14 @@ private:
 			1.0f														// lineWidth // TODO (TF 4 FEB 2026): experiment with wideLines GPU feature
 		};
 
-		// TODO (TF 4 FEB 2026): experiment with multisampling
+		// PERF: sampleShadingEnabled degrades performance, but improves internal aliasing
 		VkPipelineMultisampleStateCreateInfo multisampling {
 			VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, // sType
 			nullptr,												  // pNext
 			0,														  // flags
-			VK_SAMPLE_COUNT_1_BIT,									  // rasterizationSamples
-			VK_FALSE,												  // sampleShadingEnable
-			1.0f,													  // minSampleShading
+			msaaSamples,											  // rasterizationSamples
+			VK_TRUE,												  // sampleShadingEnable
+			0.2f,													  // minSampleShading // closer to 1.0f is smoother
 			nullptr,												  // pSampleMask
 			VK_FALSE,												  // alphaToCoverageEnable
 			VK_FALSE												  // alphaToOneEnable
@@ -1797,6 +1854,10 @@ private:
 			vkDestroySemaphore(logicalDevice, renderFinishedSemaphores[i], nullptr);
 		}
 
+		vkDestroyImageView(logicalDevice, colorImageView, nullptr);
+		vkDestroyImage(logicalDevice, colorImage, nullptr);
+		vkFreeMemory(logicalDevice, colorImageMemory, nullptr);
+
 		vkDestroyImageView(logicalDevice, depthImageView, nullptr);
 		vkDestroyImage(logicalDevice, depthImage, nullptr);
 		vkFreeMemory(logicalDevice, depthImageMemory, nullptr);
@@ -1836,6 +1897,7 @@ private:
 		// changed, for example, when application window changes monitors
 		CreateSwapChain();
 		CreateSwapChainImageViews();
+		CreateColorResources();
 		CreateDepthResources();
 		CreateFramebuffers();
 		CreateSyncObjects();
@@ -2012,7 +2074,8 @@ private:
 
 		if (candidates.crbegin()->first > 0) {
 			physicalDevice = candidates.crbegin()->second;
-			std::cout << "picking GPU [" << physicalDevice << "]" << std::endl;
+			msaaSamples = GetMaxUsableSampleCount();
+			std::cout << "picking GPU [" << physicalDevice << "] with SAMPLES [" << msaaSamples <<"]" << std::endl;
 		}
 		else {
 			throw std::runtime_error("failed to find a suitable GPU!");
@@ -2162,6 +2225,7 @@ private:
 			// TODO (TF 2 FEB 2026): left all VK_FALSE for now
 		}; 
 		deviceFeatures.samplerAnisotropy = VK_TRUE;
+		deviceFeatures.sampleRateShading = VK_TRUE; // costly, but improves internal aliasing
 
 		// Logical device layers are deprecated in favor of instance layers
 		// this is only here for legacy support
@@ -2426,9 +2490,8 @@ private:
 	}
 
 	void Cleanup() {
-		// DEBUG: wait to ensure no objects are in use
-		// or commands are being executed before attempting to free handles and bound memory
-		//vkDeviceWaitIdle(logicalDevice); // not helping...
+		// FIXME (TF 11 FEB 2026): multiple textureImageMemory allocations occur, without corresponding vkFreeMemory calls
+		// TODO (SOLUTION TF 11 FEB 2026): ensure CreateImage for textureImage is only called once at startup
 
 		CleanupSwapChain();
 
@@ -2463,8 +2526,6 @@ private:
 		vkDestroyCommandPool(logicalDevice, graphicsCommandPool, nullptr);
 		vkDestroyCommandPool(logicalDevice, transferCommandPool, nullptr);
 
-
-		// FIXME (TF 10 FEB 2026): in debug build mode not all VkDeviceMemory is freed before the Device is destroyed
 		// device queues are implicitly cleaned up when the devices is destroyed
 		vkDestroyDevice(logicalDevice, nullptr);
 
@@ -2536,6 +2597,11 @@ private:
 	VkImage depthImage;
 	VkDeviceMemory depthImageMemory;
 	VkImageView depthImageView;
+
+	VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
+	VkImage colorImage;
+	VkDeviceMemory colorImageMemory;
+	VkImageView colorImageView;
 
 	uint32_t currentFrame = 0;
 	bool framebufferResized = false;
