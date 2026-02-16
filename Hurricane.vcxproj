@@ -18,6 +18,33 @@
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="source\camera.cpp" />
+    <ClCompile Include="source\main.cpp" />
+    <ClCompile Include="source\vk_descriptors.cpp" />
+    <ClCompile Include="source\vk_engine.cpp" />
+    <ClCompile Include="source\vk_images.cpp" />
+    <ClCompile Include="source\vk_initializers.cpp" />
+    <ClCompile Include="source\vk_loader.cpp" />
+    <ClCompile Include="source\vk_pipelines.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="source\camera.h" />
+    <ClInclude Include="source\vk_descriptors.h" />
+    <ClInclude Include="source\vk_engine.h" />
+    <ClInclude Include="source\vk_images.h" />
+    <ClInclude Include="source\vk_initializers.h" />
+    <ClInclude Include="source\vk_loader.h" />
+    <ClInclude Include="source\vk_pipelines.h" />
+    <ClInclude Include="source\vk_types.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <CopyFileToFolders Include="SDL3.dll">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <FileType>Document</FileType>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </CopyFileToFolders>
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
@@ -102,14 +129,14 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>C:\Program Files\Microsoft Visual Studio\2022\Libraries\tinyobjloader-master;C:\Program Files\Microsoft Visual Studio\2022\Libraries\stb-master;C:\Program Files\Microsoft Visual Studio\2022\Libraries\glfw-3.4.bin.WIN64\include;C:\Program Files\Microsoft Visual Studio\2022\Libraries\glm-1.0.3;G:\VulkanSDK\1.4.335.0\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Program Files\Microsoft Visual Studio\2022\Libraries\tinyobjloader-master;C:\Program Files\Microsoft Visual Studio\2022\Libraries\stb-master;C:\Program Files\Microsoft Visual Studio\2022\Libraries\SDL3-3.4.0\include;C:\Program Files\Microsoft Visual Studio\2022\Libraries\glm-1.0.3;G:\VulkanSDK\1.4.335.0\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>G:\VulkanSDK\1.4.335.0\Lib;C:\Program Files\Microsoft Visual Studio\2022\Libraries\glfw-3.4.bin.WIN64\lib-vc2022;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>vulkan-1.lib;glfw3.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>C:\Program Files\Microsoft Visual Studio\2022\Libraries\SDL3-3.4.0\lib\x64;G:\VulkanSDK\1.4.335.0\Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>vulkan-1.lib;SDL3.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -120,19 +147,16 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>C:\Program Files\Microsoft Visual Studio\2022\Libraries\tinyobjloader-master;C:\Program Files\Microsoft Visual Studio\2022\Libraries\stb-master;C:\Program Files\Microsoft Visual Studio\2022\Libraries\glfw-3.4.bin.WIN64\include;C:\Program Files\Microsoft Visual Studio\2022\Libraries\glm-1.0.3;G:\VulkanSDK\1.4.335.0\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Program Files\Microsoft Visual Studio\2022\Libraries\tinyobjloader-master;C:\Program Files\Microsoft Visual Studio\2022\Libraries\stb-master;C:\Program Files\Microsoft Visual Studio\2022\Libraries\SDL3-3.4.0\include;C:\Program Files\Microsoft Visual Studio\2022\Libraries\glm-1.0.3;G:\VulkanSDK\1.4.335.0\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>G:\VulkanSDK\1.4.335.0\Lib;C:\Program Files\Microsoft Visual Studio\2022\Libraries\glfw-3.4.bin.WIN64\lib-vc2022;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>vulkan-1.lib;glfw3.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>C:\Program Files\Microsoft Visual Studio\2022\Libraries\SDL3-3.4.0\lib\x64;G:\VulkanSDK\1.4.335.0\Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>vulkan-1.lib;SDL3.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
-  <ItemGroup>
-    <ClCompile Include="main.cpp" />
-  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
