@@ -42,6 +42,8 @@
 
 #include <random>
 
+//#define MODEL
+
 struct Particle {
 	glm::vec2 position;
 	glm::vec2 velocity;
@@ -154,8 +156,8 @@ const int MAX_FRAMES_IN_FLIGHT = 2;
 // eg: dispatch of [64, 1, 1] w/local of [32, 32, 1] = 64 x 32 x32 = 65,536 invocations
 // so PARTICLE_COUNT of 4069 requires that many invocations, hence the current setup of
 // dispatch [(4096 / 256), 1, 1] local [256, 1, 1] = 4096 total invocations
-const int PARTICLE_COUNT = 4096; 
-const int WORKGROUP_SIZE_X = PARTICLE_COUNT / 256;
+const int PARTICLE_COUNT = 8192; 
+const int WORKGROUP_SIZE_X = PARTICLE_COUNT / 512;
 
 const std::string TEST_TEXTURE_PATH = "Textures/texture.jpg";
 const std::string MODEL_PATH = "Models/viking_room.obj";
@@ -467,33 +469,38 @@ private:
 		CreateSwapChainImageViews();
 
 		CreateRenderPass();
+#ifdef MODEL
 		CreateDescriptorSetLayout(0); // TODO (TF 8 FEB 2026): make descriptorSetLayout creation dynamic
+#else
 		CreateComputeDescriptorSetLayout(0);
-		CreateGraphicsPipeline();
 		CreateComputePipeline();
+#endif
+		CreateGraphicsPipeline();
 		CreateCommandPools();
 
 		CreateColorResources();
 		CreateDepthResources();
 		CreateFramebuffers(); // DEBUG: relies on depthImageView
 
-		//CreateTextureImage(MODEL_TEXTURE_PATH.c_str());
-		//CreateTextureImageView();
-		//CreateTextureSampler();
+#ifdef MODEL
+		CreateTextureImage(MODEL_TEXTURE_PATH.c_str());
+		CreateTextureImageView();
+		CreateTextureSampler();
 
-		//LoadModel();
-		//CreateVertexBuffer();
-		//CreateIndexBuffer();
+		LoadModel();
+		CreateVertexBuffer();
+		CreateIndexBuffer();
 
+		CreateTransformUniformBuffers();
+		CreateModelShaderDescriptorPool();
+		CreateModelShaderDescriptorSets(0); // TODO (TF 8 FEB 2026): make descriptorSets creation dynamic
+#else
 		InitializeParticlePositions();
 		CreateShaderStorageBuffers();
-
-		//CreateTransformUniformBuffers();
 		CreateTimeUniformBuffers();
-		//CreateModelShaderDescriptorPool();
 		CreateComputeDescriptorPool();
-		//CreateModelShaderDescriptorSets(0); // TODO (TF 8 FEB 2026): make descriptorSets creation dynamic
 		CreateComputeDescriptorSets(0);
+#endif
 		CreateGraphicsAndComputeCommandBuffers();
 		
 		CreateSyncObjects();
@@ -1681,8 +1688,10 @@ private:
 		imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
 		inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
 
+#ifndef MODEL
 		computeInFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
 		computeFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT); // FIXME (? TF 13 FEB 2026): index to swapChainImages.size as needed (simlar to renderFinishedSemaphores per frame
+#endif
 
 		// DEBUG: ensure the rendering semaphores are available to be signaled by indexing to swapChain images directly
 		// ie: vkQueuePresentKHR doesn't have pSignalSemaphores like vkQueueSubmit does, so this DrawFrame function
@@ -1705,18 +1714,23 @@ private:
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
 			VkResult imageSempaphoreResult = vkCreateSemaphore(logicalDevice, &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]);
 			VkResult frameFenceResult = vkCreateFence(logicalDevice, &fenceInfo, nullptr, &inFlightFences[i]);
+#ifndef MODEL
 			VkResult computeFrameFenceResult = vkCreateFence(logicalDevice, &fenceInfo, nullptr, &computeInFlightFences[i]);
-
+#endif
 			if (imageSempaphoreResult != VK_SUCCESS
 				|| frameFenceResult != VK_SUCCESS
-				|| computeFrameFenceResult != VK_SUCCESS) {
+#ifndef MODEL
+				|| computeFrameFenceResult != VK_SUCCESS
+#endif
+				) {
 				throw std::runtime_error("failed to create render|compute synchronization objects for a frame!");
 			}
-
+#ifndef MODEL
 			VkResult computeFinishedSemaphoreResult = vkCreateSemaphore(logicalDevice, &semaphoreInfo, nullptr, &computeFinishedSemaphores[i]);
 			if (computeFinishedSemaphoreResult != VK_SUCCESS) {
 				throw std::runtime_error("failed to create compute synchronization objects for a frame!");
 			}
+#endif
 		}
 
 		for (size_t i = 0; i < swapChainImages.size(); ++i) {
@@ -1724,7 +1738,6 @@ private:
 			if (finishedSemaphoreResult != VK_SUCCESS) {
 				throw std::runtime_error("failed to create render synchronization objects for a frame!");
 			}
-
 		}
 	}
 
@@ -1983,10 +1996,13 @@ private:
 
 	void CreateGraphicsPipeline() {
 		// TODO (TF 4 FEB 2026): remove hardcoded shader loading dependency
-		//auto vertShaderCode = ReadFile("Shaders/vert.spv");
-		//auto fragShaderCode = ReadFile("Shaders/frag.spv");
+#ifdef MODEL
+		auto vertShaderCode = ReadFile("Shaders/vert.spv");
+		auto fragShaderCode = ReadFile("Shaders/frag.spv");
+#else
 		auto vertShaderCode = ReadFile("Shaders/particleVert.spv");
 		auto fragShaderCode = ReadFile("Shaders/particleFrag.spv");
+#endif
 
 		VkShaderModule vertShaderModule = CreateShaderModule(vertShaderCode);
 		VkShaderModule fragShaderModule = CreateShaderModule(fragShaderCode);
@@ -2018,10 +2034,18 @@ private:
 			fragShaderStageInfo
 		};
 
-		// FIXME (TF 13 FEB 2026): the attributeDescrptions is borked for particles (duplicates?)
+#ifdef MODEL
 		// TODO (TF 6 FEB 2026): automate creating more than one binding
-		auto bindingDescription = Particle::GetBindingDescription(0); // Vertex::GetBindingDescription(0);
-		auto attributeDescription = Particle::GetAttributeDescriptions(0, 0); // Vertex::GetAttributeDescriptions(0, 0);
+		auto bindingDescription = Vertex::GetBindingDescription(0);
+		auto attributeDescription = Vertex::GetAttributeDescriptions(0, 0);
+		VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+		VkFrontFace frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+#else
+		auto bindingDescription = Particle::GetBindingDescription(0);
+		auto attributeDescription = Particle::GetAttributeDescriptions(0, 0);
+		VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+		VkFrontFace frontFace = VK_FRONT_FACE_CLOCKWISE;
+#endif
 
 		// TODO (TF 4 FEB 2026): use vertex and index buffers instead of hardcoding verticies in shaders
 		VkPipelineVertexInputStateCreateInfo vertexInputInfo{
@@ -2038,7 +2062,7 @@ private:
 			VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, // sType
 			nullptr,													 // pNext
 			0,															 // flags
-			VK_PRIMITIVE_TOPOLOGY_POINT_LIST,							 // topology // VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+			topology,													 // topology
 			VK_FALSE													 // primitiveRestartEnable;
 		};
 
@@ -2088,9 +2112,9 @@ private:
 			0,															// flags
 			VK_FALSE,													// depthClampEnable // TODO (TF 4 FEB 2026): experiemnt with enabled depth clipping (eg: for shadow maps) (reqires enabled GPU feature)
 			VK_FALSE,													// rasterizerDiscardEnable // if true, then geo never hits rasterizer
-			VK_POLYGON_MODE_FILL,										// polygonMode // VK_POLYGON_MODE_FILL
-			VK_CULL_MODE_BACK_BIT,										// cullMode // VK_CULL_MODE_BACK_BIT
-			VK_FRONT_FACE_CLOCKWISE,									// frontFace // VK_FRONT_FACE_COUNTER_CLOCKWISE
+			VK_POLYGON_MODE_FILL,										// polygonMode
+			VK_CULL_MODE_BACK_BIT,										// cullMode
+			frontFace,													// frontFace
 			VK_FALSE,													// depthBiasEnable // TODO (TF 4 FEB 2026): experiment with depth bias for shadow maps / z-fighting resolution
 			0.0f,														// depthBiasConstantFactor
 			0.0f,														// depthBiasClamp
@@ -2158,13 +2182,21 @@ private:
 			{0.0f, 0.0f, 0.0f, 0.0f}									// blendConstants
 		};
 
+#ifdef MODEL
+		uint32_t setLayoutCount = 1;
+		VkDescriptorSetLayout* pSetLayouts = &descriptorSetLayout;
+#else
+		uint32_t setLayoutCount = 0;
+		VkDescriptorSetLayout* pSetLayouts = nullptr;
+#endif
+
 		// TODO (TF 4 FEB 2026): experiment with uniforms and push constants
 		VkPipelineLayoutCreateInfo pipelineLayoutInfo {
 			VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,	// sType
 			nullptr,										// pNext
 			0,												// flags
-			1,												// setLayoutCount
-			&descriptorSetLayout,							// pSetLayouts
+			setLayoutCount,									// setLayoutCount
+			pSetLayouts,									// pSetLayouts
 			0,												// pushConstantRangeCount
 			nullptr,										// pPushConstantRanges
 		};
@@ -2214,8 +2246,10 @@ private:
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
 			vkDestroySemaphore(logicalDevice, imageAvailableSemaphores[i], nullptr);
 			vkDestroyFence(logicalDevice, inFlightFences[i], nullptr);
+#ifndef MODEL
 			vkDestroyFence(logicalDevice, computeInFlightFences[i], nullptr);
 			vkDestroySemaphore(logicalDevice, computeFinishedSemaphores[i], nullptr);
+#endif
 		}
 
 		for (size_t i = 0; i < swapChainImages.size(); ++i) {
@@ -2728,18 +2762,20 @@ private:
 			clearValues.data()							// pClearValues
 		};
 
-		// TODO (TF 5 FEB 2026): experiment with secondary command buffer execution
 		vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-
-		//VkBuffer vertexBuffers[] = { vertexBuffer };
-		//VkDeviceSize offsets[] = { 0 };
-		//vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-		//vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+#ifdef MODEL
+		// TODO (TF 5 FEB 2026): experiment with secondary command buffer execution
+		VkBuffer vertexBuffers[] = { vertexBuffer };
+		VkDeviceSize offsets[] = { 0 };
+		vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+		vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+#else
+		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
 		VkDeviceSize offsets[] = { 0 };
 		vkCmdBindVertexBuffers(commandBuffer, 0, 1, &shaderStorageBuffers[currentFrame], offsets);
-
+#endif
 		// configure dynamic states (viewport and scissor)
 		VkViewport viewport {
 			0.0f,										// x
@@ -2757,13 +2793,15 @@ private:
 		};
 		vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
+#ifdef MODEL
 		// TODO (TF 13 FEB 2026): commented out model shader descriptor set to allow particle system to render
-		//vkCmdBindDescriptorSets(graphicsAndComputeCommandBuffers[currentFrame], 
-		//						VK_PIPELINE_BIND_POINT_GRAPHICS, 
-		//						pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, nullptr);
-
-		//vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
+		vkCmdBindDescriptorSets(graphicsAndComputeCommandBuffers[currentFrame], 
+								VK_PIPELINE_BIND_POINT_GRAPHICS, 
+								pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, nullptr);
+		vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
+#else
 		vkCmdDraw(commandBuffer, PARTICLE_COUNT, 1, 0, 0);
+#endif
 		vkCmdEndRenderPass(commandBuffer);
 
 		VkResult endBufferResult = vkEndCommandBuffer(commandBuffer);
@@ -2825,6 +2863,19 @@ private:
 	}
 
 	void DrawFrame() {
+		// TODO (TF 13 FEB 2026): instead of waiting for computeInFlightFences,
+		// maybe just use different commandBuffers so they aren't prematurely reset
+		std::vector<VkFence> waitFences = {
+			inFlightFences[currentFrame]
+		};
+
+		// FIXME (2/2) (TF 13 FEB 2026): if currentFrame throws validation errors,
+		// then use imageIndex of the current swapChain image for the signal semaphore index
+		std::vector<VkSemaphore> waitSemaphores = {
+			imageAvailableSemaphores[currentFrame]
+		};
+
+#ifndef MODEL
 		// ========== BEGIN COMPUTE WORK ==========
 		// TODO (TF 5 FEB 2026) Experiment with timeline semaphores
 		vkWaitForFences(logicalDevice, 1, &computeInFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
@@ -2854,17 +2905,14 @@ private:
 		if (computeSubmitResult != VK_SUCCESS) {
 			throw std::runtime_error("failed to submit compute command buffer!");
 		}
-		// ========== END COMPUTE WORK ==========
-		 
-		// ========== BEGIN RENDER WORK ==========
-		// TODO (TF 13 FEB 2026): instead of waiting for computeInFlightFences,
-		// maybe just use different commandBuffers so they aren't prematurely reset
-		VkFence waitFences[] = {
-			computeInFlightFences[currentFrame],
-			inFlightFences[currentFrame]
-		};
 
-		vkWaitForFences(logicalDevice, 2, waitFences, VK_TRUE, UINT64_MAX);
+		waitFences.push_back(computeInFlightFences[currentFrame]);
+		waitSemaphores.insert(waitSemaphores.begin(), computeFinishedSemaphores[currentFrame]);
+		// ========== END COMPUTE WORK ==========
+#endif
+		// ========== BEGIN RENDER WORK ==========
+
+		vkWaitForFences(logicalDevice, static_cast<uint32_t>(waitFences.size()), waitFences.data(), VK_TRUE, UINT64_MAX);
 
 		uint32_t imageIndex;
 		VkResult acquireResult = vkAcquireNextImageKHR(logicalDevice, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
@@ -2882,16 +2930,10 @@ private:
 		
 		vkResetCommandBuffer(graphicsAndComputeCommandBuffers[currentFrame], 0); // TODO (TF 5 FEB 2026): experiment with releasing resources on reset
 
-		//UpdateTransformUniformBuffer(currentFrame);
-
+#ifdef MODEL
+		UpdateTransformUniformBuffer(currentFrame);
+#endif
 		RecordGraphicsCommandBuffer(graphicsAndComputeCommandBuffers[currentFrame], imageIndex);
-
-		// FIXME (2/2) (TF 13 FEB 2026): if currentFrame throws validation errors,
-		// then use imageIndex of the current swapChain image for the signal semaphore index
-		std::array<VkSemaphore, 2> waitSemaphores = { 
-			computeFinishedSemaphores[currentFrame],
-			imageAvailableSemaphores[currentFrame]
-		};
 
 		// DEBUG: ensure the rendering semaphores are available to be signaled by indexing to swapChain images directly
 		// ie: vkQueuePresentKHR doesn't have pSignalSemaphores like vkQueueSubmit does, so this DrawFrame function
@@ -2955,6 +2997,7 @@ private:
 	void Cleanup() {
 		CleanupSwapChain();
 
+#ifdef MODEL
 		vkDestroySampler(logicalDevice, textureSampler, nullptr);
 		vkDestroyImageView(logicalDevice, textureImageView, nullptr);
 
@@ -2962,9 +3005,21 @@ private:
 		vkFreeMemory(logicalDevice, textureImageMemory, nullptr);
 
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-			//vkDestroyBuffer(logicalDevice, transformUniformBuffers[i], nullptr);
-			//vkFreeMemory(logicalDevice, transformUniformBuffersMemory[i], nullptr);
+			vkDestroyBuffer(logicalDevice, transformUniformBuffers[i], nullptr);
+			vkFreeMemory(logicalDevice, transformUniformBuffersMemory[i], nullptr);
+		}
 
+		// all descriptor sets are implicitly cleaned up when the descriptor pool is destroyed
+		vkDestroyDescriptorPool(logicalDevice, descriptorPool, nullptr);
+		vkDestroyDescriptorSetLayout(logicalDevice, descriptorSetLayout, nullptr);
+
+		vkDestroyBuffer(logicalDevice, vertexBuffer, nullptr);
+		vkFreeMemory(logicalDevice, vertexBufferMemory, nullptr);
+
+		vkDestroyBuffer(logicalDevice, indexBuffer, nullptr);
+		vkFreeMemory(logicalDevice, indexBufferMemory, nullptr);
+#else
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
 			vkDestroyBuffer(logicalDevice, timeUniformBuffers[i], nullptr);
 			vkFreeMemory(logicalDevice, timeUniformBuffersMemory[i], nullptr);
 
@@ -2972,25 +3027,16 @@ private:
 			vkFreeMemory(logicalDevice, shaderStorageBuffersMemory[i], nullptr);
 		}
 
-		// all descriptor sets are implicitly cleaned up when the descriptor pool is destroyed
-		vkDestroyDescriptorPool(logicalDevice, descriptorPool, nullptr);
 		vkDestroyDescriptorPool(logicalDevice, computeDescriptorPool, nullptr);
-
-		vkDestroyDescriptorSetLayout(logicalDevice, descriptorSetLayout, nullptr);
 		vkDestroyDescriptorSetLayout(logicalDevice, computeDescriptorSetLayout, nullptr);
-
-		vkDestroyBuffer(logicalDevice, vertexBuffer, nullptr);
-		vkFreeMemory(logicalDevice, vertexBufferMemory, nullptr);
-
-		vkDestroyBuffer(logicalDevice, indexBuffer, nullptr);
-		vkFreeMemory(logicalDevice, indexBufferMemory, nullptr);
-
+#endif
 		vkDestroyPipeline(logicalDevice, graphicsPipeline, nullptr);
 		vkDestroyPipelineLayout(logicalDevice, pipelineLayout, nullptr);
 
+#ifndef MODEL
 		vkDestroyPipeline(logicalDevice, computePipeline, nullptr);
 		vkDestroyPipelineLayout(logicalDevice, computePipelineLayout, nullptr);
-
+#endif
 		vkDestroyRenderPass(logicalDevice, renderPass, nullptr);
 		
 		// all command buffers are implicitly cleaned up when the command pool is destroyed
