@@ -5,12 +5,32 @@
 
 #include "vk_types.h"
 
+// TODO (TF 26 FEB 2026): (memory perf) replace std::function with
+// typed arrays of vulkan handles directly deleted in loops
+struct DeletionQueue {
+
+	std::deque<std::function<void()>> deletors;
+
+	void push_function(std::function<void()>&& function) {
+		deletors.push_back(function);
+	}
+
+	void flush() {
+		for (auto it = deletors.rbegin(); it != deletors.rend(); it++) {
+			(*it)(); // call deletion functors
+		}
+
+		deletors.clear();
+	}
+};
+
 struct FrameData {
 	VkCommandPool _commandPool;
 	VkCommandBuffer _mainCommandBuffer;
 	VkSemaphore _swapchainSemaphore;
-	VkSemaphore _renderSemaphore;
 	VkFence _renderFence;
+
+	DeletionQueue _deletionQueue;
 };
 
 constexpr unsigned int FRAME_OVERLAP = 2;
@@ -36,10 +56,13 @@ public:
 	std::vector<VkImage> _swapchainImages;
 	std::vector<VkImageView> _swapchainImageViews;
 	VkExtent2D _swapchainExtent;
+	std::vector<VkSemaphore> _renderSemaphores;
 
 	FrameData _frames[FRAME_OVERLAP];
 	VkQueue _graphicsQueue;
 	uint32_t _graphicsQueueFamily;
+
+	DeletionQueue _mainDeletionQueue;
 
 	FrameData& get_current_frame() { return _frames[_frameNumber % FRAME_OVERLAP]; }
 

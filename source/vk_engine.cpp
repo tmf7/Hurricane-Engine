@@ -59,10 +59,16 @@ void VulkanEngine::cleanup()
         for (int i = 0; i < FRAME_OVERLAP; ++i) {
             vkDestroyCommandPool(_device, _frames[i]._commandPool, nullptr);
             vkDestroyFence(_device, _frames[i]._renderFence, nullptr);
-            vkDestroySemaphore(_device, _frames[i]._renderSemaphore, nullptr);
             vkDestroySemaphore(_device, _frames[i]._swapchainSemaphore, nullptr);
+
+            _frames[i]._deletionQueue.flush();
         }
 
+        for (int i = 0; i < _renderSemaphores.size(); ++i) {
+            vkDestroySemaphore(_device, _renderSemaphores[i], nullptr);
+        }
+
+        _mainDeletionQueue.flush();
 
         destroy_swapchain();
         vkDestroySurfaceKHR(_instance, _surface, nullptr);
@@ -84,10 +90,11 @@ void VulkanEngine::draw()
     VK_CHECK(vkWaitForFences(_device, 1, &get_current_frame()._renderFence, VK_TRUE, UINT64_MAX));
     VK_CHECK(vkResetFences(_device, 1, &get_current_frame()._renderFence));
 
+    get_current_frame()._deletionQueue.flush();
+
     uint32_t swapchainImageIndex;
     VK_CHECK(vkAcquireNextImageKHR(_device, _swapchain, UINT64_MAX, get_current_frame()._swapchainSemaphore, nullptr, &swapchainImageIndex));
 
-    // FIXME (TF 25 FEB 2026): index the semaphores to the swapchain image index, not the frame index
     VkCommandBuffer cmd = get_current_frame()._mainCommandBuffer;
     VK_CHECK(vkResetCommandBuffer(cmd, 0));
     
@@ -112,7 +119,7 @@ void VulkanEngine::draw()
     // signal the _renderSemaphore, to signals that rendering has finished
     VkCommandBufferSubmitInfo cmdInfo = vkinit::command_buffer_submit_info(cmd);
     VkSemaphoreSubmitInfo waitInfo = vkinit::semaphore_submit_info(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR, get_current_frame()._swapchainSemaphore);
-    VkSemaphoreSubmitInfo signalInfo = vkinit::semaphore_submit_info(VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT, get_current_frame()._renderSemaphore);
+    VkSemaphoreSubmitInfo signalInfo = vkinit::semaphore_submit_info(VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT, _renderSemaphores[swapchainImageIndex]);
 
     VkSubmitInfo2 submit = vkinit::submit_info(&cmdInfo, &signalInfo, &waitInfo);
 
@@ -123,7 +130,7 @@ void VulkanEngine::draw()
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .pNext = nullptr,
         .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &get_current_frame()._renderSemaphore,
+        .pWaitSemaphores = &_renderSemaphores[swapchainImageIndex],
         .swapchainCount = 1,
         .pSwapchains = &_swapchain,
         .pImageIndices = &swapchainImageIndex,
@@ -183,7 +190,6 @@ void VulkanEngine::init_vulkan()
     _instance = vkb_inst.instance;
     _debug_messenger = vkb_inst.debug_messenger;
 
-    // FIXME (TF 25 FEB 2026): use a specific memory allocator
     SDL_Vulkan_CreateSurface(_window, _instance, nullptr, &_surface);
 
     // vulkan 1.3 features
@@ -246,9 +252,13 @@ void VulkanEngine::init_sync_structures()
     for (int i = 0; i < FRAME_OVERLAP; ++i) {
         VK_CHECK(vkCreateFence(_device, &fenceCreateInfo, nullptr, &_frames[i]._renderFence));
         VK_CHECK(vkCreateSemaphore(_device, &semaphoreCreateInfo, nullptr, &_frames[i]._swapchainSemaphore));
-        VK_CHECK(vkCreateSemaphore(_device, &semaphoreCreateInfo, nullptr, &_frames[i]._renderSemaphore));
     }
 
+    _renderSemaphores.resize(_swapchainImages.size());
+
+    for (int i = 0; i < _renderSemaphores.size(); ++i) {
+        VK_CHECK(vkCreateSemaphore(_device, &semaphoreCreateInfo, nullptr, &_renderSemaphores[i]));
+    }
 }
 
 void VulkanEngine::create_swapchain(uint32_t width, uint32_t height)
