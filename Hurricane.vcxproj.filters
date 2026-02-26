@@ -39,6 +39,9 @@
     <ClCompile Include="source\vk_pipelines.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\vk-bootstrap\VkBootstrap.cpp">
+      <Filter>Resource Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="source\camera.h">
@@ -70,5 +73,10 @@
     <CopyFileToFolders Include="SDL3.dll">
       <Filter>Resource Files</Filter>
     </CopyFileToFolders>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\vk-bootstrap\VkBootstrapFeatureChain.inl">
+      <Filter>Resource Files</Filter>
+    </None>
   </ItemGroup>
 </Project>

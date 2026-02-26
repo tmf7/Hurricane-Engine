@@ -16,16 +16,17 @@
 //#include <vk_mem_alloc.h>
 
 //#include <fmt/core.h>
+#include <iostream>
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec4.hpp>
 
 
-#define VK_CHECK(x)                                                     \
-    do {                                                                \
-        VkResult err = x;                                               \
-        if (err) {                                                      \
-            fmt::println("Detected Vulkan error: {}", string_VkResult(err)); \
-            abort();                                                    \
-        }                                                               \
+#define VK_CHECK(x)                                                                      \
+    do {                                                                                 \
+        VkResult err = x;                                                                \
+        if (err) {                                                                       \
+            std::cout << "Detected Vulkan error: " << string_VkResult(err) << std::endl; \
+            abort();                                                                     \
+        }                                                                                \
     } while (0)
