@@ -4,6 +4,7 @@
 #pragma once
 
 #include "vk_types.h"
+#include "vk_descriptors.h"
 
 // TODO (TF 26 FEB 2026): (memory perf) replace std::function with
 // typed arrays of vulkan handles directly deleted in loops
@@ -63,6 +64,17 @@ public:
 	uint32_t _graphicsQueueFamily;
 
 	DeletionQueue _mainDeletionQueue;
+	VmaAllocator _allocator;
+
+	AllocatedImage _drawImage;
+	VkExtent2D _drawExtent;
+
+	DescriptorAllocator globalDescriptorAllocator;
+	VkDescriptorSet _drawImageDescriptors;
+	VkDescriptorSetLayout _drawImageDescriptorLayout;
+
+	VkPipeline _gradientPipeline;
+	VkPipelineLayout _gradientPipelineLayout;
 
 	FrameData& get_current_frame() { return _frames[_frameNumber % FRAME_OVERLAP]; }
 
@@ -88,4 +100,8 @@ private:
 	void init_sync_structures();
 	void create_swapchain(uint32_t width, uint32_t height);
 	void destroy_swapchain();
+	void draw_background(VkCommandBuffer cmd);
+	void init_descriptors();
+	void init_pipelines();
+	void init_background_pipelines();
 };

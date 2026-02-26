@@ -13,7 +13,7 @@
 
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_enum_string_helper.h>
-//#include <vk_mem_alloc.h>
+#include <vk_mem_alloc.h>
 
 //#include <fmt/core.h>
 #include <iostream>
@@ -30,3 +30,11 @@
             abort();                                                                     \
         }                                                                                \
     } while (0)
+
+struct AllocatedImage {
+    VkImage image;
+    VkImageView imageView;
+    VmaAllocation allocation;
+    VkExtent3D imageExtent;
+    VkFormat imageFormat;
+};
