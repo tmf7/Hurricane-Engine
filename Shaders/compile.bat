@@ -6,4 +6,6 @@ G:\VulkanSDK\1.4.335.0\Bin\glslc.exe particleShader.vert -o particleVert.spv
 G:\VulkanSDK\1.4.335.0\Bin\glslc.exe particleShader.frag -o particleFrag.spv
 
 G:\VulkanSDK\1.4.335.0\Bin\glslc.exe gradient.comp -o gradient.spv
+G:\VulkanSDK\1.4.335.0\Bin\glslc.exe gradient_color.comp -o gradient_color.spv
+G:\VulkanSDK\1.4.335.0\Bin\glslc.exe sky.comp -o sky.spv
 pause

@@ -128,6 +128,9 @@ VkRenderingAttachmentInfo vkinit::attachment_info(VkImageView view, VkClearValue
 
     colorAttachment.imageView = view;
     colorAttachment.imageLayout = layout;
+    // .resolveMode = 0,
+    // .resolveImageView = VK_NULL_HANDLE,
+    // .resolveImageLayout = VK_LAYOUT_UNDEFINED,
     colorAttachment.loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
     colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     if (clear) {
@@ -159,9 +162,11 @@ VkRenderingInfo vkinit::rendering_info(VkExtent2D renderExtent, VkRenderingAttac
     VkRenderingInfo renderInfo {};
     renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     renderInfo.pNext = nullptr;
+    // .flags = 0,
 
     renderInfo.renderArea = VkRect2D { VkOffset2D { 0, 0 }, renderExtent };
     renderInfo.layerCount = 1;
+    // .viewMask = 0,
     renderInfo.colorAttachmentCount = 1;
     renderInfo.pColorAttachments = colorAttachment;
     renderInfo.pDepthAttachment = depthAttachment;

@@ -19,6 +19,13 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui.cpp" />
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_backends\imgui_impl_sdl3.cpp" />
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_backends\imgui_impl_vulkan.cpp" />
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_demo.cpp" />
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_draw.cpp" />
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_tables.cpp" />
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_widgets.cpp" />
     <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\vk-bootstrap\VkBootstrap.cpp" />
     <ClCompile Include="source\camera.cpp" />
     <ClCompile Include="source\main.cpp" />
@@ -133,7 +140,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>C:\Program Files\Microsoft Visual Studio\2022\Libraries\vk-mem-allocator;C:\Program Files\Microsoft Visual Studio\2022\Libraries\vk-bootstrap;C:\Program Files\Microsoft Visual Studio\2022\Libraries\tinyobjloader-master;C:\Program Files\Microsoft Visual Studio\2022\Libraries\stb-master;C:\Program Files\Microsoft Visual Studio\2022\Libraries\SDL3-3.4.0\include;C:\Program Files\Microsoft Visual Studio\2022\Libraries\glm-1.0.3;G:\VulkanSDK\1.4.335.0\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min;C:\Program Files\Microsoft Visual Studio\2022\Libraries\vk-mem-allocator;C:\Program Files\Microsoft Visual Studio\2022\Libraries\vk-bootstrap;C:\Program Files\Microsoft Visual Studio\2022\Libraries\tinyobjloader-master;C:\Program Files\Microsoft Visual Studio\2022\Libraries\stb-master;C:\Program Files\Microsoft Visual Studio\2022\Libraries\SDL3-3.4.0\include;C:\Program Files\Microsoft Visual Studio\2022\Libraries\glm-1.0.3;G:\VulkanSDK\1.4.335.0\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
@@ -151,7 +158,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>C:\Program Files\Microsoft Visual Studio\2022\Libraries\vk-mem-allocator;C:\Program Files\Microsoft Visual Studio\2022\Libraries\vk-bootstrap;C:\Program Files\Microsoft Visual Studio\2022\Libraries\tinyobjloader-master;C:\Program Files\Microsoft Visual Studio\2022\Libraries\stb-master;C:\Program Files\Microsoft Visual Studio\2022\Libraries\SDL3-3.4.0\include;C:\Program Files\Microsoft Visual Studio\2022\Libraries\glm-1.0.3;G:\VulkanSDK\1.4.335.0\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min;C:\Program Files\Microsoft Visual Studio\2022\Libraries\vk-mem-allocator;C:\Program Files\Microsoft Visual Studio\2022\Libraries\vk-bootstrap;C:\Program Files\Microsoft Visual Studio\2022\Libraries\tinyobjloader-master;C:\Program Files\Microsoft Visual Studio\2022\Libraries\stb-master;C:\Program Files\Microsoft Visual Studio\2022\Libraries\SDL3-3.4.0\include;C:\Program Files\Microsoft Visual Studio\2022\Libraries\glm-1.0.3;G:\VulkanSDK\1.4.335.0\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>

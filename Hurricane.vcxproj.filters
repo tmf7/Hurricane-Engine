@@ -42,6 +42,27 @@
     <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\vk-bootstrap\VkBootstrap.cpp">
       <Filter>Resource Files</Filter>
     </ClCompile>
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_backends\imgui_impl_sdl3.cpp">
+      <Filter>Resource Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_backends\imgui_impl_vulkan.cpp">
+      <Filter>Resource Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui.cpp">
+      <Filter>Resource Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_demo.cpp">
+      <Filter>Resource Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_draw.cpp">
+      <Filter>Resource Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_tables.cpp">
+      <Filter>Resource Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_widgets.cpp">
+      <Filter>Resource Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="source\camera.h">

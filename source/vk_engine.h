@@ -6,6 +6,20 @@
 #include "vk_types.h"
 #include "vk_descriptors.h"
 
+struct ComputePushConstants {
+	glm::vec4 data1;
+	glm::vec4 data2;
+	glm::vec4 data3;
+	glm::vec4 data4;
+};
+
+struct ComputeEffect {
+	const char* name;
+	VkPipeline pipeline;
+	VkPipelineLayout layout;
+	ComputePushConstants data;
+};
+
 // TODO (TF 26 FEB 2026): (memory perf) replace std::function with
 // typed arrays of vulkan handles directly deleted in loops
 struct DeletionQueue {
@@ -76,6 +90,17 @@ public:
 	VkPipeline _gradientPipeline;
 	VkPipelineLayout _gradientPipelineLayout;
 
+	// ===== BEGIN IMGUI UI ========
+	VkFence _immFence;
+	VkCommandBuffer _immCommandBuffer;
+	VkCommandPool _immCommandPool;
+
+	void immediate_submit(std::function<void(VkCommandBuffer cmd)>&& function);
+	// ===== END IMGUI UI =========
+
+	std::vector<ComputeEffect> backgroundEffects;
+	int currentBackgroundEffect{0};
+
 	FrameData& get_current_frame() { return _frames[_frameNumber % FRAME_OVERLAP]; }
 
 	static VulkanEngine& Get();
@@ -104,4 +129,9 @@ private:
 	void init_descriptors();
 	void init_pipelines();
 	void init_background_pipelines();
+
+	// ===== BEGIN IMGUI UI ========
+	void init_imgui();
+	void draw_imgui(VkCommandBuffer cmd, VkImageView targetImageView);
+	// ===== END IMGUI UI =========
 };
