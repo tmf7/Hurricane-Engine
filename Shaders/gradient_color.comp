@@ -20,10 +20,16 @@ void main()
 	
 	vec4 topColor = PushConstants.data1;
 	vec4 bottomColor = PushConstants.data2;
+	vec4 outColor = vec4(0.0f, 0.0f, 0.0f, 1.0f);
 	
 	if (texelCoord.x < size.x && texelCoord.y < size.y)
 	{
-		float blend = float(texelCoord.y)/(size.y);
-		imageStore(image, texelCoord, mix(topColor, bottomColor, blend));
+		if (gl_LocalInvocationID.x != 0 && gl_LocalInvocationID.y != 0) 
+		{
+			float blend = float(texelCoord.y)/(size.y);
+			outColor = mix(topColor, bottomColor, blend);
+		}
+		
+		imageStore(image, texelCoord, outColor);
 	}
 }

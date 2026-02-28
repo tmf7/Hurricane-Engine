@@ -318,7 +318,7 @@ void VulkanEngine::run()
         ImGui::NewFrame();
 
         // test-only
-        //ImGui::ShowDemoWindow();
+        ImGui::ShowDemoWindow();
 
         if (ImGui::Begin("background")) {
             ComputeEffect& selected = backgroundEffects[currentBackgroundEffect];
