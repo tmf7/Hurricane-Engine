@@ -90,6 +90,9 @@ public:
 	VkPipeline _gradientPipeline;
 	VkPipelineLayout _gradientPipelineLayout;
 
+	VkPipelineLayout _trianglePipelineLayout;
+	VkPipeline _trianglePipeline;
+
 	// ===== BEGIN IMGUI UI ========
 	VkFence _immFence;
 	VkCommandBuffer _immCommandBuffer;
@@ -129,6 +132,7 @@ private:
 	void init_descriptors();
 	void init_pipelines();
 	void init_background_pipelines();
+	void init_triangle_pipeline();
 
 	// ===== BEGIN IMGUI UI ========
 	void init_imgui();

@@ -604,6 +604,7 @@ void VulkanEngine::init_descriptors()
 void VulkanEngine::init_pipelines()
 {
     init_background_pipelines();
+    init_triangle_pipeline();
 }
 
 void VulkanEngine::init_background_pipelines()
@@ -690,4 +691,20 @@ void VulkanEngine::init_background_pipelines()
         vkDestroyPipeline(_device, sky.pipeline, nullptr);
         vkDestroyPipeline(_device, gradient.pipeline, nullptr);
     });
+}
+
+void VulkanEngine::init_triangle_pipeline()
+{
+    VkShaderModule triangleFragShader;
+    if (!vkutil::load_shader_module("Shaders/colored_trangle_frag.spv", _device, &triangleFragShader)) {
+        std::cout << "Error when building the triangle fragment shader module!" << std::endl;
+    }
+
+    VkShaderModule triangleVertexShader;
+    if (!vkutil::load_shader_module("Shaders/colored_triangle_vert.spv", _device, &triangleVertexShader)) {
+        std::cout << "Error when building the triangle vertex shader module!" << std::endl;
+    }
+
+    VkPipelineLayoutCreateInfo pipeline_layout_info = vkinit::pipeline_layout_create_info();
+    VK_CHECK(vkCreatePipelineLayout(_device, &pipeline_layout_info, nullptr, &_trianglePipelineLayout));
 }
