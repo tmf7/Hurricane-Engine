@@ -133,6 +133,7 @@ private:
 	void init_pipelines();
 	void init_background_pipelines();
 	void init_triangle_pipeline();
+	void draw_geometry(VkCommandBuffer cmd);
 
 	// ===== BEGIN IMGUI UI ========
 	void init_imgui();
