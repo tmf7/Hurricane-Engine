@@ -119,7 +119,7 @@ VkPipeline PipelineBuilder::build_pipeline(VkDevice device)
 
 	VkGraphicsPipelineCreateInfo pipelineInfo{
 		.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-		.pNext = nullptr,
+		.pNext = &_renderInfo, // dynamic rendering is used
 		.flags = 0,
 		.stageCount = static_cast<uint32_t>(_shaderStages.size()),
 		.pStages = _shaderStages.data(),
