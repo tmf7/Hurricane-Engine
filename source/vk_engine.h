@@ -89,8 +89,10 @@ public:
 
 	VkPipelineLayout _gradientPipelineLayout;
 
-	VkPipelineLayout _trianglePipelineLayout;
-	VkPipeline _trianglePipeline;
+	VkPipelineLayout _meshPipelineLayout;
+	VkPipeline _meshPipeline;
+
+	GPUMeshBuffers _rectangle;
 
 	// ===== BEGIN IMGUI UI ========
 	VkFence _immFence;
@@ -131,8 +133,13 @@ private:
 	void init_descriptors();
 	void init_pipelines();
 	void init_background_pipelines();
-	void init_triangle_pipeline();
+	void init_mesh_pipeline();
 	void draw_geometry(VkCommandBuffer cmd);
+	AllocatedBuffer create_buffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage);
+	void destroy_buffer(const AllocatedBuffer& buffer);
+	GPUMeshBuffers uploadMesh(std::span<uint32_t> indies, std::span<Vertex> vertices);
+
+	void init_default_mesh_data();
 
 	// ===== BEGIN IMGUI UI ========
 	void init_imgui();
