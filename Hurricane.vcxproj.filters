@@ -13,6 +13,21 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="Resource Files\fastgltf">
+      <UniqueIdentifier>{fa389e01-244c-4ea8-8c97-32b672f5cac3}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Resource Files\imgui">
+      <UniqueIdentifier>{ac301673-2186-4107-a4d5-4b3841801c6e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Resource Files\simdjson">
+      <UniqueIdentifier>{da54d30e-186c-4526-8505-ef066dda1752}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Resource Files\vk-bootstrap">
+      <UniqueIdentifier>{14634f4d-e284-45ff-a1b3-841eee2355c8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Resource Files\sdl3">
+      <UniqueIdentifier>{bc1ab533-063f-4099-ab8c-6e6a3431e13c}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="source\camera.cpp">
@@ -39,29 +54,44 @@
     <ClCompile Include="source\vk_pipelines.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\vk-bootstrap\VkBootstrap.cpp">
-      <Filter>Resource Files</Filter>
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\fastgltf\src\base64.cpp">
+      <Filter>Resource Files\fastgltf</Filter>
     </ClCompile>
-    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_backends\imgui_impl_sdl3.cpp">
-      <Filter>Resource Files</Filter>
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\fastgltf\src\fastgltf.cpp">
+      <Filter>Resource Files\fastgltf</Filter>
     </ClCompile>
-    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_backends\imgui_impl_vulkan.cpp">
-      <Filter>Resource Files</Filter>
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\fastgltf\src\fastgltf.ixx">
+      <Filter>Resource Files\fastgltf</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\fastgltf\src\io.cpp">
+      <Filter>Resource Files\fastgltf</Filter>
     </ClCompile>
     <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui.cpp">
-      <Filter>Resource Files</Filter>
+      <Filter>Resource Files\imgui</Filter>
     </ClCompile>
     <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_demo.cpp">
-      <Filter>Resource Files</Filter>
+      <Filter>Resource Files\imgui</Filter>
     </ClCompile>
     <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_draw.cpp">
-      <Filter>Resource Files</Filter>
+      <Filter>Resource Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_backends\imgui_impl_sdl3.cpp">
+      <Filter>Resource Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_backends\imgui_impl_vulkan.cpp">
+      <Filter>Resource Files\imgui</Filter>
     </ClCompile>
     <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_tables.cpp">
-      <Filter>Resource Files</Filter>
+      <Filter>Resource Files\imgui</Filter>
     </ClCompile>
     <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\dearIMGUI_min\imgui_widgets.cpp">
-      <Filter>Resource Files</Filter>
+      <Filter>Resource Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\vk-bootstrap\VkBootstrap.cpp">
+      <Filter>Resource Files\vk-bootstrap</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\simdjson\simdjson.cpp">
+      <Filter>Resource Files\simdjson</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -91,13 +121,13 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <CopyFileToFolders Include="SDL3.dll">
-      <Filter>Resource Files</Filter>
-    </CopyFileToFolders>
+    <None Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\vk-bootstrap\VkBootstrapFeatureChain.inl">
+      <Filter>Resource Files\vk-bootstrap</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
-    <None Include="C:\Program Files\Microsoft Visual Studio\2022\Libraries\vk-bootstrap\VkBootstrapFeatureChain.inl">
-      <Filter>Resource Files</Filter>
-    </None>
+    <CopyFileToFolders Include="SDL3.dll">
+      <Filter>Resource Files\sdl3</Filter>
+    </CopyFileToFolders>
   </ItemGroup>
 </Project>

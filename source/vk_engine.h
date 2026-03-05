@@ -5,6 +5,7 @@
 
 #include "vk_types.h"
 #include "vk_descriptors.h"
+#include "vk_loader.h"
 
 struct ComputePushConstants {
 	glm::vec4 data1;
@@ -93,6 +94,7 @@ public:
 	VkPipeline _meshPipeline;
 
 	GPUMeshBuffers _rectangle;
+	std::vector<std::shared_ptr<MeshAsset>> _testMeshes;
 
 	// ===== BEGIN IMGUI UI ========
 	VkFence _immFence;
@@ -121,6 +123,8 @@ public:
 	//run main loop
 	void run();
 
+	GPUMeshBuffers uploadMesh(std::span<uint32_t> indies, std::span<Vertex> vertices);
+
 private:
 
 	void init_vulkan();
@@ -137,7 +141,6 @@ private:
 	void draw_geometry(VkCommandBuffer cmd);
 	AllocatedBuffer create_buffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage);
 	void destroy_buffer(const AllocatedBuffer& buffer);
-	GPUMeshBuffers uploadMesh(std::span<uint32_t> indies, std::span<Vertex> vertices);
 
 	void init_default_mesh_data();
 

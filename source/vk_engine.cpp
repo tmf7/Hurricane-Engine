@@ -18,6 +18,10 @@
 
 #include "vk_pipelines.h"
 
+#define GLM_ENABLE_EXPERIMENTAL
+//#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/transform.hpp>
+
 // ======= BEGIN IMGUI UI ========
 #include <imgui.h>
 #include <imgui_backends\imgui_impl_sdl3.h>
@@ -199,6 +203,11 @@ void VulkanEngine::cleanup()
 
         for (int i = 0; i < _renderSemaphores.size(); ++i) {
             vkDestroySemaphore(_device, _renderSemaphores[i], nullptr);
+        }
+
+        for (auto& mesh : _testMeshes) {
+            destroy_buffer(mesh->meshBuffers.indexBuffer);
+            destroy_buffer(mesh->meshBuffers.vertexBuffer);
         }
 
         _mainDeletionQueue.flush();
@@ -756,11 +765,20 @@ void VulkanEngine::draw_geometry(VkCommandBuffer cmd)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipeline);
 
     GPUDrawPushConstants push_constants;
-    push_constants.worldMatrix = glm::mat4{ 1.0f };
-    push_constants.vertexBuffer = _rectangle.vertexBufferAddress;
+
+    glm::mat4 viewMatrix = glm::translate(glm::vec3{0.0f, 0.0f, -5.0f});
+
+    // PERF: flipping the near and far plane values AND flipping the depth increases the quality of depth testing
+    glm::mat4 projectionMatrix = glm::perspective(glm::radians(70.0f), ((float)_drawExtent.width) / (float)_drawExtent.height, 10000.0f, 0.1f);
+
+    // invert y-axis of openGL glTF file to match vulkan's downward y-axis
+    projectionMatrix[1][1] *= -1.0f;
+
+    push_constants.worldMatrix = projectionMatrix;// *viewMatrix;
+    push_constants.vertexBuffer = _testMeshes[2]->meshBuffers.vertexBufferAddress;
 
     vkCmdPushConstants(cmd, _meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &push_constants);
-    vkCmdBindIndexBuffer(cmd, _rectangle.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdBindIndexBuffer(cmd, _testMeshes[2]->meshBuffers.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
     VkViewport viewport{
         .x = 0,
@@ -780,7 +798,7 @@ void VulkanEngine::draw_geometry(VkCommandBuffer cmd)
 
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    vkCmdDrawIndexed(cmd, 6, 1, 0, 0, 0);
+    vkCmdDrawIndexed(cmd, _testMeshes[2]->surfaces[0].count, 1, _testMeshes[2]->surfaces[0].startIndex, 0, 0);
     vkCmdEndRendering(cmd);
 }
 
@@ -872,30 +890,32 @@ GPUMeshBuffers VulkanEngine::uploadMesh(std::span<uint32_t> indices, std::span<V
 
 void VulkanEngine::init_default_mesh_data()
 {
-    std::array<Vertex, 4> rect_vertices;
-    rect_vertices[0].position = { 0.5f, -0.5f, 0.0f };
-    rect_vertices[1].position = { 0.5f, 0.5f, 0.0f };
-    rect_vertices[2].position = { -0.5f, -0.5f, 0.0f };
-    rect_vertices[3].position = { -0.5f, 0.5f, 0.0f };
+    _testMeshes = loadGltfMeshes(this, "Models/basicmesh.glb").value();
 
-    rect_vertices[0].color = { 0.0f, 0.0f, 0.0f, 1.0f };
-    rect_vertices[1].color = { 0.5f, 0.5f, 0.5f, 1.0f };
-    rect_vertices[2].color = { 1.0f, 0.0f, 0.0f, 1.0f };
-    rect_vertices[3].color = { 0.0f, 1.0f, 0.0f, 1.0f };
+    //std::array<Vertex, 4> rect_vertices;
+    //rect_vertices[0].position = { 0.5f, -0.5f, 0.0f };
+    //rect_vertices[1].position = { 0.5f, 0.5f, 0.0f };
+    //rect_vertices[2].position = { -0.5f, -0.5f, 0.0f };
+    //rect_vertices[3].position = { -0.5f, 0.5f, 0.0f };
 
-    std::array<uint32_t, 6> rect_indices;
-    rect_indices[0] = 0;
-    rect_indices[1] = 1;
-    rect_indices[2] = 2;
+    //rect_vertices[0].color = { 0.0f, 0.0f, 0.0f, 1.0f };
+    //rect_vertices[1].color = { 0.5f, 0.5f, 0.5f, 1.0f };
+    //rect_vertices[2].color = { 1.0f, 0.0f, 0.0f, 1.0f };
+    //rect_vertices[3].color = { 0.0f, 1.0f, 0.0f, 1.0f };
 
-    rect_indices[3] = 2;
-    rect_indices[4] = 1;
-    rect_indices[5] = 3;
+    //std::array<uint32_t, 6> rect_indices;
+    //rect_indices[0] = 0;
+    //rect_indices[1] = 1;
+    //rect_indices[2] = 2;
 
-    _rectangle = uploadMesh(rect_indices, rect_vertices);
+    //rect_indices[3] = 2;
+    //rect_indices[4] = 1;
+    //rect_indices[5] = 3;
 
-    _mainDeletionQueue.push_function([&]() {
-        destroy_buffer(_rectangle.vertexBuffer);
-        destroy_buffer(_rectangle.indexBuffer);
-    });
+    //_rectangle = uploadMesh(rect_indices, rect_vertices);
+
+    //_mainDeletionQueue.push_function([&]() {
+    //    destroy_buffer(_rectangle.vertexBuffer);
+    //    destroy_buffer(_rectangle.indexBuffer);
+    //});
 }
