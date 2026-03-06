@@ -82,19 +82,22 @@ public:
 	VmaAllocator _allocator;
 
 	AllocatedImage _drawImage;
+	AllocatedImage _depthImage;
 	VkExtent2D _drawExtent;
 
 	DescriptorAllocator globalDescriptorAllocator;
 	VkDescriptorSet _drawImageDescriptors;
 	VkDescriptorSetLayout _drawImageDescriptorLayout;
 
-	VkPipelineLayout _gradientPipelineLayout;
+	std::vector<ComputeEffect> _backgroundEffects;
+	int _currentBackgroundEffect{0};
+	VkPipelineLayout _backgroundPipelineLayout;
 
 	VkPipelineLayout _meshPipelineLayout;
 	VkPipeline _meshPipeline;
 
-	GPUMeshBuffers _rectangle;
 	std::vector<std::shared_ptr<MeshAsset>> _testMeshes;
+
 
 	// ===== BEGIN IMGUI UI ========
 	VkFence _immFence;
@@ -104,8 +107,6 @@ public:
 	void immediate_submit(std::function<void(VkCommandBuffer cmd)>&& function);
 	// ===== END IMGUI UI =========
 
-	std::vector<ComputeEffect> backgroundEffects;
-	int currentBackgroundEffect{0};
 
 	FrameData& get_current_frame() { return _frames[_frameNumber % FRAME_OVERLAP]; }
 

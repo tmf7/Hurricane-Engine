@@ -251,6 +251,7 @@ void VulkanEngine::draw()
     draw_background(cmd);
 
     vkutil::transition_image(cmd, _drawImage.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    vkutil::transition_image(cmd, _depthImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
 
     draw_geometry(cmd);
 
@@ -335,10 +336,10 @@ void VulkanEngine::run()
         //ImGui::ShowDemoWindow();
 
         if (ImGui::Begin("background")) {
-            ComputeEffect& selected = backgroundEffects[currentBackgroundEffect];
+            ComputeEffect& selected = _backgroundEffects[_currentBackgroundEffect];
 
             ImGui::Text("Selected effect: ", selected.name);
-            ImGui::SliderInt("Effect Index", &currentBackgroundEffect, 0, backgroundEffects.size() - 1);
+            ImGui::SliderInt("Effect Index", &_currentBackgroundEffect, 0, _backgroundEffects.size() - 1);
         
             ImGui::InputFloat4("data1", (float*)&selected.data.data1);
             ImGui::InputFloat4("data2", (float*)&selected.data.data2);
@@ -439,27 +440,41 @@ void VulkanEngine::init_swapchain()
     _drawImage.imageFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     _drawImage.imageExtent = drawImageExtent;
 
+    _depthImage.imageFormat = VK_FORMAT_D32_SFLOAT;
+    _depthImage.imageExtent = drawImageExtent;
+
     VkImageUsageFlags drawImageUsages{};
     drawImageUsages |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     drawImageUsages |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     drawImageUsages |= VK_IMAGE_USAGE_STORAGE_BIT;
     drawImageUsages |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
+    VkImageUsageFlags depthImageUsages{};
+    depthImageUsages |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+
     VkImageCreateInfo rimg_info = vkinit::image_create_info(_drawImage.imageFormat, drawImageUsages, drawImageExtent);
+    VkImageCreateInfo dimg_info = vkinit::image_create_info(_depthImage.imageFormat, depthImageUsages, drawImageExtent);
 
     // abstract image allocation and binding with VulkanMemoryAllocator
-    VmaAllocationCreateInfo rimg_allocInfo = {};
-    rimg_allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-    rimg_allocInfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VmaAllocationCreateInfo img_allocInfo = {};
+    img_allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    img_allocInfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     
-    vmaCreateImage(_allocator, &rimg_info, &rimg_allocInfo, &_drawImage.image, &_drawImage.allocation, nullptr);
+    vmaCreateImage(_allocator, &rimg_info, &img_allocInfo, &_drawImage.image, &_drawImage.allocation, nullptr);
     VkImageViewCreateInfo rview_info = vkinit::imageview_create_info(_drawImage.imageFormat, _drawImage.image, VK_IMAGE_ASPECT_COLOR_BIT);
 
     VK_CHECK(vkCreateImageView(_device, &rview_info, nullptr, &_drawImage.imageView));
 
+    vmaCreateImage(_allocator, &dimg_info, &img_allocInfo, &_depthImage.image, &_depthImage.allocation, nullptr);
+    VkImageViewCreateInfo dview_info = vkinit::imageview_create_info(_depthImage.imageFormat, _depthImage.image, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    VK_CHECK(vkCreateImageView(_device, &dview_info, nullptr, &_depthImage.imageView));
+
     _mainDeletionQueue.push_function([=]() {
         vkDestroyImageView(_device, _drawImage.imageView, nullptr);
+        vkDestroyImageView(_device, _depthImage.imageView, nullptr);
         vmaDestroyImage(_allocator, _drawImage.image, _drawImage.allocation);
+        vmaDestroyImage(_allocator, _depthImage.image, _depthImage.allocation);
     });
 }
 
@@ -556,12 +571,12 @@ void VulkanEngine::draw_background(VkCommandBuffer cmd)
     //vkCmdClearColorImage(cmd, _drawImage.image, VK_IMAGE_LAYOUT_GENERAL, &clearValue, 1, &clearRange);
 
     ////////////////////////
-    ComputeEffect& effect = backgroundEffects[currentBackgroundEffect];
+    ComputeEffect& effect = _backgroundEffects[_currentBackgroundEffect];
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, effect.pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, effect.layout, 0, 1, &_drawImageDescriptors, 0, nullptr);
 
 
-    vkCmdPushConstants(cmd, _gradientPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &effect.data);
+    vkCmdPushConstants(cmd, _backgroundPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &effect.data);
 
     vkCmdDispatch(cmd, static_cast<uint32_t>(std::ceil(_drawExtent.width / 16.0)), 
                        static_cast<uint32_t>(std::ceil(_drawExtent.height / 16.0)),
@@ -639,7 +654,7 @@ void VulkanEngine::init_background_pipelines()
         .pPushConstantRanges = &pushConstant
     };
 
-    VK_CHECK(vkCreatePipelineLayout(_device, &computeLayout, nullptr, &_gradientPipelineLayout));
+    VK_CHECK(vkCreatePipelineLayout(_device, &computeLayout, nullptr, &_backgroundPipelineLayout));
 
     VkShaderModule gradientComputeShader;
     if (!vkutil::load_shader_module("Shaders/gradient_color.spv", _device, &gradientComputeShader)) {
@@ -666,13 +681,13 @@ void VulkanEngine::init_background_pipelines()
         .pNext = nullptr,
         .flags = 0,
         .stage = stageInfo,
-        .layout = _gradientPipelineLayout
+        .layout = _backgroundPipelineLayout
          // basePipelineHandle = VK_NULL_HANDLE
          // basePipelineIndex = 0
     };
 
     ComputeEffect gradient;
-    gradient.layout = _gradientPipelineLayout;
+    gradient.layout = _backgroundPipelineLayout;
     gradient.name = "gradient";
     gradient.data = {};
 
@@ -685,7 +700,7 @@ void VulkanEngine::init_background_pipelines()
     computePipelineCreateInfo.stage.module = skyComputeShader;
 
     ComputeEffect sky;
-    sky.layout = _gradientPipelineLayout;
+    sky.layout = _backgroundPipelineLayout;
     sky.name = "sky";
     sky.data = {};
 
@@ -694,14 +709,14 @@ void VulkanEngine::init_background_pipelines()
 
     VK_CHECK(vkCreateComputePipelines(_device, VK_NULL_HANDLE, 1, &computePipelineCreateInfo, nullptr, &sky.pipeline));
 
-    backgroundEffects.push_back(gradient);
-    backgroundEffects.push_back(sky);
+    _backgroundEffects.push_back(gradient);
+    _backgroundEffects.push_back(sky);
 
     vkDestroyShaderModule(_device, skyComputeShader, nullptr);
     vkDestroyShaderModule(_device, gradientComputeShader, nullptr);
 
     _mainDeletionQueue.push_function([=]() {
-        vkDestroyPipelineLayout(_device, _gradientPipelineLayout, nullptr);
+        vkDestroyPipelineLayout(_device, _backgroundPipelineLayout, nullptr);
         vkDestroyPipeline(_device, sky.pipeline, nullptr);
         vkDestroyPipeline(_device, gradient.pipeline, nullptr);
     });
@@ -740,9 +755,10 @@ void VulkanEngine::init_mesh_pipeline()
     pipelineBuilder.set_cull_mode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
     pipelineBuilder.set_multisampling_none();
     pipelineBuilder.disable_blending();
-    pipelineBuilder.disable_depthtest();
+    //pipelineBuilder.disable_depthtest();
+    pipelineBuilder.enable_depthtest(true, VK_COMPARE_OP_GREATER_OR_EQUAL);
     pipelineBuilder.set_color_attachment_format(_drawImage.imageFormat);
-    pipelineBuilder.set_depth_format(VK_FORMAT_UNDEFINED);
+    pipelineBuilder.set_depth_format(_depthImage.imageFormat);
 
     _meshPipeline = pipelineBuilder.build_pipeline(_device);
 
@@ -758,23 +774,36 @@ void VulkanEngine::init_mesh_pipeline()
 void VulkanEngine::draw_geometry(VkCommandBuffer cmd)
 {
     VkRenderingAttachmentInfo colorAttachment = vkinit::attachment_info(_drawImage.imageView, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    VkRenderingAttachmentInfo depthAttachment = vkinit::depth_attachment_info(_depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
 
-    VkRenderingInfo renderInfo = vkinit::rendering_info(_drawExtent, &colorAttachment, nullptr);
+    VkRenderingInfo renderInfo = vkinit::rendering_info(_windowExtent, &colorAttachment, &depthAttachment);
     vkCmdBeginRendering(cmd, &renderInfo);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipeline);
 
     GPUDrawPushConstants push_constants;
 
-    glm::mat4 viewMatrix = glm::translate(glm::vec3{0.0f, 0.0f, -5.0f});
+    // ================= BEGIN TEST =========================================
+    static auto startTime = std::chrono::high_resolution_clock::now();
 
-    // PERF: flipping the near and far plane values AND flipping the depth increases the quality of depth testing
-    glm::mat4 projectionMatrix = glm::perspective(glm::radians(70.0f), ((float)_drawExtent.width) / (float)_drawExtent.height, 10000.0f, 0.1f);
+    auto currentTime = std::chrono::high_resolution_clock::now();
+    float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+    
+    glm::f32 rotationRate = time * glm::radians(90.0f);
+    glm::vec3 upAxis = glm::vec3(0.0f, 1.0f, 0.0f);
+    glm::mat4 modelMatrix = glm::rotate(glm::mat4{ 1.0f }, rotationRate, upAxis);
+    // =================== END TEST =======================================
+    glm::mat4 viewMatrix = 
+        //glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), upAxis);
+        glm::translate(glm::vec3{0.0f, 0.0f, -5.0f});
+
+    // PERF: flipping the near and far plane values AND flipping the depth test increases the precision for distant objects
+    glm::mat4 projectionMatrix = glm::perspective(glm::radians(70.0f), ((float)_drawExtent.width) / ((float)_drawExtent.height), 10000.0f, 0.1f);
 
     // invert y-axis of openGL glTF file to match vulkan's downward y-axis
     projectionMatrix[1][1] *= -1.0f;
 
-    push_constants.worldMatrix = projectionMatrix;// *viewMatrix;
+    push_constants.worldMatrix = projectionMatrix * viewMatrix * modelMatrix;
     push_constants.vertexBuffer = _testMeshes[2]->meshBuffers.vertexBufferAddress;
 
     vkCmdPushConstants(cmd, _meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &push_constants);
@@ -891,31 +920,4 @@ GPUMeshBuffers VulkanEngine::uploadMesh(std::span<uint32_t> indices, std::span<V
 void VulkanEngine::init_default_mesh_data()
 {
     _testMeshes = loadGltfMeshes(this, "Models/basicmesh.glb").value();
-
-    //std::array<Vertex, 4> rect_vertices;
-    //rect_vertices[0].position = { 0.5f, -0.5f, 0.0f };
-    //rect_vertices[1].position = { 0.5f, 0.5f, 0.0f };
-    //rect_vertices[2].position = { -0.5f, -0.5f, 0.0f };
-    //rect_vertices[3].position = { -0.5f, 0.5f, 0.0f };
-
-    //rect_vertices[0].color = { 0.0f, 0.0f, 0.0f, 1.0f };
-    //rect_vertices[1].color = { 0.5f, 0.5f, 0.5f, 1.0f };
-    //rect_vertices[2].color = { 1.0f, 0.0f, 0.0f, 1.0f };
-    //rect_vertices[3].color = { 0.0f, 1.0f, 0.0f, 1.0f };
-
-    //std::array<uint32_t, 6> rect_indices;
-    //rect_indices[0] = 0;
-    //rect_indices[1] = 1;
-    //rect_indices[2] = 2;
-
-    //rect_indices[3] = 2;
-    //rect_indices[4] = 1;
-    //rect_indices[5] = 3;
-
-    //_rectangle = uploadMesh(rect_indices, rect_vertices);
-
-    //_mainDeletionQueue.push_function([&]() {
-    //    destroy_buffer(_rectangle.vertexBuffer);
-    //    destroy_buffer(_rectangle.indexBuffer);
-    //});
 }
