@@ -84,6 +84,7 @@ public:
 	AllocatedImage _drawImage;
 	AllocatedImage _depthImage;
 	VkExtent2D _drawExtent;
+	float _renderScale = 1.0f;
 
 	DescriptorAllocator globalDescriptorAllocator;
 	VkDescriptorSet _drawImageDescriptors;
@@ -97,7 +98,7 @@ public:
 	VkPipeline _meshPipeline;
 
 	std::vector<std::shared_ptr<MeshAsset>> _testMeshes;
-
+	bool _resizeRequested;
 
 	// ===== BEGIN IMGUI UI ========
 	VkFence _immFence;
@@ -106,7 +107,6 @@ public:
 
 	void immediate_submit(std::function<void(VkCommandBuffer cmd)>&& function);
 	// ===== END IMGUI UI =========
-
 
 	FrameData& get_current_frame() { return _frames[_frameNumber % FRAME_OVERLAP]; }
 
@@ -142,6 +142,7 @@ private:
 	void draw_geometry(VkCommandBuffer cmd);
 	AllocatedBuffer create_buffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage);
 	void destroy_buffer(const AllocatedBuffer& buffer);
+	void resize_swapchain();
 
 	void init_default_mesh_data();
 
