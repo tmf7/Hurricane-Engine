@@ -86,3 +86,173 @@ VkDescriptorSet DescriptorAllocator::allocate(VkDevice device, VkDescriptorSetLa
 
 	return set;
 }
+
+// =====================================================================
+
+void DescriptorAllocatorGrowable::init(VkDevice device, uint32_t initialSets, std::span<PoolSizeRatio> poolRatios)
+{
+	ratios.clear();
+
+	for (PoolSizeRatio& poolRatio : poolRatios) {
+		ratios.push_back(poolRatio);
+	}
+
+	VkDescriptorPool newPool = create_pool(device, initialSets, poolRatios);
+	setsPerPool = initialSets * 1.5f;
+	readyPools.push_back(newPool);
+}
+
+void DescriptorAllocatorGrowable::clear_pools(VkDevice device)
+{
+	for (VkDescriptorPool& pool : readyPools) {
+		vkResetDescriptorPool(device, pool, 0);
+	}
+
+	for (VkDescriptorPool& pool : fullPools) {
+		vkResetDescriptorPool(device, pool, 0);
+		readyPools.push_back(pool);
+	}
+	fullPools.clear();
+}
+
+void DescriptorAllocatorGrowable::destroy_pools(VkDevice device)
+{
+	for (VkDescriptorPool& pool : readyPools) {
+		vkDestroyDescriptorPool(device, pool, nullptr);
+	}
+	
+	for (VkDescriptorPool& pool : fullPools) {
+		vkDestroyDescriptorPool(device, pool, nullptr);
+	}
+	readyPools.clear();
+	fullPools.clear();
+}
+
+VkDescriptorSet DescriptorAllocatorGrowable::allocate(VkDevice device, VkDescriptorSetLayout layout, void* pNext)
+{
+	VkDescriptorPool poolToUse = get_pool(device);
+
+	VkDescriptorSetAllocateInfo allocInfo{
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+		.pNext = pNext,
+		.descriptorPool = poolToUse,
+		.descriptorSetCount = 1,
+		.pSetLayouts = &layout
+	};
+
+	VkDescriptorSet descriptorSet;
+	VkResult result = vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet);
+	if (result == VK_ERROR_OUT_OF_POOL_MEMORY
+		|| result == VK_ERROR_FRAGMENTED_POOL) {
+		
+		fullPools.push_back(poolToUse);
+		poolToUse = get_pool(device);
+		allocInfo.descriptorPool = poolToUse;
+		VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet));
+	}
+
+	readyPools.push_back(poolToUse);
+	return descriptorSet;
+}
+
+VkDescriptorPool DescriptorAllocatorGrowable::get_pool(VkDevice device)
+{
+	VkDescriptorPool newPool;
+	if (readyPools.size() != 0) {
+		newPool = readyPools.back();
+		readyPools.pop_back();
+	}
+	else {
+		newPool = create_pool(device, setsPerPool, ratios);
+
+		setsPerPool = setsPerPool * 1.5f;
+		if (setsPerPool > 4092) {
+			setsPerPool = 4092;
+		}
+	}
+	return newPool;
+}
+
+// FIXME (TF 15 MAR 2026): same as DescriptorAllocator::init_pool above
+VkDescriptorPool DescriptorAllocatorGrowable::create_pool(VkDevice device, uint32_t setCount, std::span<PoolSizeRatio> poolRatios)
+{
+	std::vector<VkDescriptorPoolSize> poolSizes;
+	for (PoolSizeRatio ratio : poolRatios) {
+		poolSizes.push_back(VkDescriptorPoolSize{
+				.type = ratio.type,
+				.descriptorCount = static_cast<uint32_t>(ratio.ratio * setCount)
+			});
+	}
+
+	VkDescriptorPoolCreateInfo pool_info{
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+		.pNext = nullptr,
+		.flags = 0,
+		.maxSets = setCount,
+		.poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+		.pPoolSizes = poolSizes.data()
+	};
+
+	VkDescriptorPool newPool;
+	vkCreateDescriptorPool(device, &pool_info, nullptr, &newPool); // FIXME (TF 15 MAR 2026): this allocation may fail
+
+	return newPool;
+}
+
+void DescriptorWriter::write_image(int binding, VkImageView image, VkSampler sampler, VkImageLayout layout, VkDescriptorType type)
+{
+	VkDescriptorImageInfo& info = imageInfos.emplace_back(VkDescriptorImageInfo{
+			.sampler = sampler,
+			.imageView = image,
+			.imageLayout = layout
+		});
+
+	VkWriteDescriptorSet write{
+		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		.pNext = nullptr,
+		.dstSet = VK_NULL_HANDLE, // left empty until written
+		.dstBinding = binding,
+		.descriptorCount = 1,
+		.pImageInfo = &info
+	};
+
+	writes.push_back(write);
+}
+
+void DescriptorWriter::write_buffer(int binding, VkBuffer buffer, size_t size, size_t offset, VkDescriptorType type)
+{
+	VkDescriptorBufferInfo& info = bufferInfos.emplace_back(VkDescriptorBufferInfo{
+			.buffer = buffer,
+			.offset = offset,
+			.range = size
+		});
+
+	VkWriteDescriptorSet write{
+		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		.pNext = nullptr,
+		.dstSet = VK_NULL_HANDLE, // DEBUG: left empty until written
+		.dstBinding = binding,
+		.descriptorCount = 1,
+		.descriptorType = type,
+		.pBufferInfo = &info
+	};
+
+	writes.push_back(write);
+}
+
+void DescriptorWriter::clear() {
+	imageInfos.clear();
+	bufferInfos.clear();
+	writes.clear();
+}
+
+void DescriptorWriter::update_set(VkDevice device, VkDescriptorSet set)
+{
+	for (VkWriteDescriptorSet& write : writes) {
+		write.dstSet = set;
+	}
+
+	vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+}
+
+

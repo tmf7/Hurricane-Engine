@@ -244,8 +244,8 @@ void VulkanEngine::draw()
     VkCommandBuffer cmd = get_current_frame()._mainCommandBuffer;
     VK_CHECK(vkResetCommandBuffer(cmd, 0));
     
-    _drawExtent.width = std::min(_swapchainExtent.width, _drawImage.imageExtent.width) * _renderScale;
     _drawExtent.height = std::min(_swapchainExtent.height, _drawImage.imageExtent.height) * _renderScale;
+    _drawExtent.width = std::min(_swapchainExtent.width, _drawImage.imageExtent.width) * _renderScale;
 
     VkCommandBufferBeginInfo cmdBeginInfo = vkinit::command_buffer_begin_info(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
     VK_CHECK(vkBeginCommandBuffer(cmd, &cmdBeginInfo));
@@ -298,7 +298,6 @@ void VulkanEngine::draw()
     if (presentResult == VK_ERROR_OUT_OF_DATE_KHR 
         /*|| presentResult == VK_SUBOPTIMAL_KHR*/) {
         _resizeRequested = true;
-        return;
     }
     _frameNumber++;
 }
@@ -617,26 +616,32 @@ void VulkanEngine::init_descriptors()
 
     _drawImageDescriptors = globalDescriptorAllocator.allocate(_device, _drawImageDescriptorLayout);
 
-    VkDescriptorImageInfo imgInfo{
-        .sampler = VK_NULL_HANDLE,
-        .imageView = _drawImage.imageView,
-        .imageLayout = VK_IMAGE_LAYOUT_GENERAL
-    };
+    // ===== BEGIN DEPRECATED ========
+    //VkDescriptorImageInfo imgInfo{
+    //    .sampler = VK_NULL_HANDLE,
+    //    .imageView = _drawImage.imageView,
+    //    .imageLayout = VK_IMAGE_LAYOUT_GENERAL
+    //};
 
-    VkWriteDescriptorSet drawImageWrite{
-        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-        .pNext = nullptr,
-        .dstSet = _drawImageDescriptors,
-        .dstBinding = binding,
-        .dstArrayElement = 0,
-        .descriptorCount = 1,
-        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-        .pImageInfo = &imgInfo
-        //.pBufferInfo = nullptr,
-        //.pTexelBufferView = nullptr
-    };
+    //VkWriteDescriptorSet drawImageWrite{
+    //    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+    //    .pNext = nullptr,
+    //    .dstSet = _drawImageDescriptors,
+    //    .dstBinding = binding,
+    //    .dstArrayElement = 0,
+    //    .descriptorCount = 1,
+    //    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+    //    .pImageInfo = &imgInfo
+    //    //.pBufferInfo = nullptr,
+    //    //.pTexelBufferView = nullptr
+    //};
 
-    vkUpdateDescriptorSets(_device, 1, &drawImageWrite, 0, nullptr);
+    //vkUpdateDescriptorSets(_device, 1, &drawImageWrite, 0, nullptr);
+    // ===== END DEPRECATED ========
+
+    DescriptorWriter writer;
+    writer.write_image(0, _drawImage.imageView, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+    writer.update_set(_device, _drawImageDescriptors);
 
     _mainDeletionQueue.push_function([&]() {
         globalDescriptorAllocator.destroy_pool(_device);
@@ -792,7 +797,7 @@ void VulkanEngine::draw_geometry(VkCommandBuffer cmd)
     VkRenderingAttachmentInfo colorAttachment = vkinit::attachment_info(_drawImage.imageView, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     VkRenderingAttachmentInfo depthAttachment = vkinit::depth_attachment_info(_depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
 
-    VkRenderingInfo renderInfo = vkinit::rendering_info(_windowExtent, &colorAttachment, &depthAttachment);
+    VkRenderingInfo renderInfo = vkinit::rendering_info(_drawExtent, &colorAttachment, &depthAttachment);
     vkCmdBeginRendering(cmd, &renderInfo);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipeline);
