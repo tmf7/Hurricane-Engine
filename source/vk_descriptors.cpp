@@ -98,7 +98,7 @@ void DescriptorAllocatorGrowable::init(VkDevice device, uint32_t initialSets, st
 	}
 
 	VkDescriptorPool newPool = create_pool(device, initialSets, poolRatios);
-	setsPerPool = initialSets * 1.5f;
+	setsPerPool = static_cast<uint32_t>(initialSets * 1.5f);
 	readyPools.push_back(newPool);
 }
 
@@ -165,7 +165,7 @@ VkDescriptorPool DescriptorAllocatorGrowable::get_pool(VkDevice device)
 	else {
 		newPool = create_pool(device, setsPerPool, ratios);
 
-		setsPerPool = setsPerPool * 1.5f;
+		setsPerPool = static_cast<uint32_t>(setsPerPool * 1.5f);
 		if (setsPerPool > 4092) {
 			setsPerPool = 4092;
 		}
@@ -199,7 +199,7 @@ VkDescriptorPool DescriptorAllocatorGrowable::create_pool(VkDevice device, uint3
 	return newPool;
 }
 
-void DescriptorWriter::write_image(int binding, VkImageView image, VkSampler sampler, VkImageLayout layout, VkDescriptorType type)
+void DescriptorWriter::write_image(uint32_t binding, VkImageView image, VkSampler sampler, VkImageLayout layout, VkDescriptorType type)
 {
 	VkDescriptorImageInfo& info = imageInfos.emplace_back(VkDescriptorImageInfo{
 			.sampler = sampler,
@@ -212,14 +212,18 @@ void DescriptorWriter::write_image(int binding, VkImageView image, VkSampler sam
 		.pNext = nullptr,
 		.dstSet = VK_NULL_HANDLE, // left empty until written
 		.dstBinding = binding,
+		// .dstArrayElement = 0,
 		.descriptorCount = 1,
+		.descriptorType = type,
 		.pImageInfo = &info
+		// .pBufferInfo = nullptr,
+		// .pTexelBufferView = nullptr
 	};
 
 	writes.push_back(write);
 }
 
-void DescriptorWriter::write_buffer(int binding, VkBuffer buffer, size_t size, size_t offset, VkDescriptorType type)
+void DescriptorWriter::write_buffer(uint32_t binding, VkBuffer buffer, size_t size, size_t offset, VkDescriptorType type)
 {
 	VkDescriptorBufferInfo& info = bufferInfos.emplace_back(VkDescriptorBufferInfo{
 			.buffer = buffer,
@@ -254,5 +258,3 @@ void DescriptorWriter::update_set(VkDevice device, VkDescriptorSet set)
 
 	vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
-
-
