@@ -10,4 +10,7 @@ G:\VulkanSDK\1.4.335.0\Bin\glslc.exe gradient_color.comp -o gradient_color.spv
 G:\VulkanSDK\1.4.335.0\Bin\glslc.exe sky.comp -o sky.spv
 G:\VulkanSDK\1.4.335.0\Bin\glslc.exe colored_triangle.vert -o colored_triangle_vert.spv
 G:\VulkanSDK\1.4.335.0\Bin\glslc.exe colored_triangle.frag -o colored_triangle_frag.spv
+
+G:\VulkanSDK\1.4.335.0\Bin\glslc.exe mesh.vert -o meshVertex.spv
+G:\VulkanSDK\1.4.335.0\Bin\glslc.exe mesh.frag -o meshFragment.spv
 pause

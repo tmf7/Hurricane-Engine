@@ -59,6 +59,35 @@ struct GPUSceneData {
 	glm::vec4 sunlightColor;
 };
 
+struct GLTFMetallic_Roughness {
+	MaterialPipeline opaquePipeline;
+	MaterialPipeline transparentPipeline;
+	VkDescriptorSetLayout _materialLayout;
+
+	// written to uniform buffer (dataBuffer)
+	struct MaterialConstants {
+		glm::vec4 colorFactors;
+		glm::vec4 metal_rough_factors;
+		glm::vec4 padding[14]; // for 256-byte alignment
+	};
+
+	struct MaterialResources {
+		AllocatedImage colorImage;
+		VkSampler colorSampler;
+		AllocatedImage metalRoughImage;
+		VkSampler metalRoughSampler;
+		VkBuffer dataBuffer;
+		uint32_t dataBufferOffset;
+	};
+
+	DescriptorWriter writer;
+
+	void build_pipelines(VulkanEngine* engine);
+	void clear_resources(VkDevice device);
+
+	MaterialInstance write_material(VkDevice device, MaterialPass pass, const MaterialResources& resources, DescriptorAllocatorGrowable& descriptorAllocator);
+};
+
 constexpr unsigned int FRAME_OVERLAP = 2;
 
 class VulkanEngine {
@@ -96,7 +125,7 @@ public:
 	VkExtent2D _drawExtent;
 	float _renderScale = 1.0f;
 
-	DescriptorAllocator globalDescriptorAllocator;
+	DescriptorAllocatorGrowable globalDescriptorAllocator;
 	VkDescriptorSet _drawImageDescriptors;
 	VkDescriptorSetLayout _drawImageDescriptorLayout;
 
@@ -121,6 +150,9 @@ public:
 
 	VkSampler _defaultSamplerLinear;
 	VkSampler _defaultSamplerNearest;
+
+	MaterialInstance _defaultMaterialData;
+	GLTFMetallic_Roughness _metalRoughMaterial;
 
 	// ===== BEGIN IMGUI UI ========
 	VkFence _immFence;
