@@ -84,3 +84,36 @@ struct MaterialInstance {
     VkDescriptorSet materialSet;
     MaterialPass passType;
 };
+
+struct DrawContext;
+
+class IRenderable 
+{
+    virtual void Draw(const glm::mat4& rootMatrix, DrawContext& ctx) = 0;
+};
+
+struct Node : public IRenderable 
+{
+    std::weak_ptr<Node> parent;
+    std::vector<std::shared_ptr<Node>> children;
+
+    glm::mat4 localTransform;
+    glm::mat4 worldTransform;
+
+    void RefreshTransform(const glm::mat4& parentMatrix) 
+    {
+        worldTransform = parentMatrix * localTransform;
+        for (auto child : children) 
+        {
+            child->RefreshTransform(worldTransform);
+        }
+    }
+
+    virtual void Draw(const glm::mat4& rootMatrix, DrawContext& ctx)
+    {
+        for (auto& child : children)
+        {
+            child->Draw(rootMatrix, ctx);
+        }
+    }
+};

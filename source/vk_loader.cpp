@@ -121,7 +121,7 @@ std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(VulkanEngi
 			newMesh.surfaces.push_back(newSurface);
 		}
 		// display vertex normals
-		constexpr bool overrideColors = true;
+		constexpr bool overrideColors = false;
 		if (overrideColors) {
 			for (Vertex& vertex : vertices) {
 				vertex.color = glm::vec4(vertex.normal, 1.0f);

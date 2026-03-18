@@ -40,7 +40,6 @@ constexpr bool bUseValidationLayers = true;
 
 VulkanEngine* loadedEngine = nullptr;
 
-// ======= BEGIN IMGUI UI ========
 void VulkanEngine::immediate_submit(std::function<void(VkCommandBuffer cmd)>&& function)
 {
     VK_CHECK(vkResetFences(_device, 1, &_immFence));
@@ -60,6 +59,7 @@ void VulkanEngine::immediate_submit(std::function<void(VkCommandBuffer cmd)>&& f
     VK_CHECK(vkWaitForFences(_device, 1, &_immFence, VK_TRUE, UINT64_MAX));
 }
 
+// ======= BEGIN IMGUI UI ========
 void VulkanEngine::init_imgui()
 {
     // FIXME (TF 27 FEB 2026): wasteful descriptor pool sizes (from imgui demo)
@@ -151,6 +151,9 @@ void VulkanEngine::draw_imgui(VkCommandBuffer cmd, VkImageView targetImageView)
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
     vkCmdEndRendering(cmd);
 }
+
+// ======= END IMGUI UI ========
+
 AllocatedImage VulkanEngine::create_image(VkExtent3D size, VkFormat format, VkImageUsageFlags usage, bool mipmapped)
 {
     AllocatedImage newImage{
@@ -222,7 +225,46 @@ void VulkanEngine::destroy_image(const AllocatedImage& image)
     vkDestroyImageView(_device, image.imageView, nullptr);
     vmaDestroyImage(_allocator, image.image, image.allocation);
 }
-// ======= END IMGUI UI ========
+
+void VulkanEngine::update_scene()
+{
+    mainDrawContext.opaqueSurfaces.clear();
+
+    // ================= BEGIN "ANIMATION" =========================================
+    static auto startTime = std::chrono::high_resolution_clock::now();
+
+    auto currentTime = std::chrono::high_resolution_clock::now();
+    float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+
+    glm::f32 rotationRate = time * glm::radians(90.0f);
+    glm::vec3 upAxis = glm::vec3(0.0f, 1.0f, 0.0f);
+    glm::mat4 modelMatrix = glm::rotate(glm::mat4{ 1.0f }, rotationRate, upAxis);
+    // =================== END "ANIMATION" =======================================
+
+    for (int x = -3; x < 3; ++x) 
+    {
+        glm::mat4 scale = glm::scale(glm::vec3{0.2f});
+        glm::mat4 translation = glm::translate(glm::vec3{x, -1.0f, 0.0f});
+        loadedNodes["Cube"]->Draw(translation * scale * modelMatrix, mainDrawContext);
+    }
+
+    loadedNodes["Suzanne"]->Draw(glm::mat4{ 1.0f } * modelMatrix, mainDrawContext);
+    sceneData.viewMatrix = glm::translate(glm::vec3{ 0.0f, 0.0f, -5.0f });
+    // PERF: flipping the near and far plane values AND flipping the depth test increases the precision for distant objects
+    sceneData.projectionMatrix = glm::perspective(glm::radians(70.0f), ((float)_windowExtent.width) / ((float)_windowExtent.height), 10000.0f, 0.1f);
+    // DEBUG (TF 18 MAR 2026): was _drawExtent width/height but caused divide-by-zero error since update_scene called too early for _drawExtent to be defined
+
+    // invert y-axis of openGL glTF file to match vulkan's downward y-axis
+    sceneData.projectionMatrix[1][1] *= -1.0f;
+
+
+    sceneData.viewProjectionMatrix = sceneData.projectionMatrix * sceneData.viewMatrix;
+
+    sceneData.ambientColor = glm::vec4{0.1f};
+    sceneData.sunlightColor = glm::vec4{ 1.0f };
+    sceneData.sunlightDirection = glm::vec4{ 0.0f, 1.0f, 0.5f, 1.0f };
+
+}
 
 VulkanEngine& VulkanEngine::Get() { return *loadedEngine; }
 
@@ -299,6 +341,8 @@ void VulkanEngine::cleanup()
 
 void VulkanEngine::draw()
 {
+    update_scene();
+
     // TODO (TF 25 FEB 2026): set timeout to 1 second (1000000000 ns)
     VK_CHECK(vkWaitForFences(_device, 1, &get_current_frame()._renderFence, VK_TRUE, UINT64_MAX));
     VK_CHECK(vkResetFences(_device, 1, &get_current_frame()._renderFence));
@@ -672,7 +716,9 @@ void VulkanEngine::init_descriptors()
 {
     std::vector<DescriptorAllocatorGrowable::PoolSizeRatio> sizes =
     {
-        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 }
+        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 },
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3 },
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 }
     };
 
     // TODO (TF 26 FEB 2026): make hardcoded maxSets value dynamic
@@ -924,6 +970,8 @@ void VulkanEngine::draw_geometry(VkCommandBuffer cmd)
     VkRenderingInfo renderInfo = vkinit::rendering_info(_drawExtent, &colorAttachment, &depthAttachment);
     vkCmdBeginRendering(cmd, &renderInfo);
 
+    // =========== BEGIN DEPRECATED ===========
+    /* 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipeline);
 
     VkDescriptorSet imageSet = get_current_frame()._frameDescriptors.allocate(_device, _singleImageDescriptorLayout);
@@ -980,7 +1028,47 @@ void VulkanEngine::draw_geometry(VkCommandBuffer cmd)
 
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    vkCmdDrawIndexed(cmd, _testMeshes[2]->surfaces[0].count, 1, _testMeshes[2]->surfaces[0].startIndex, 0, 0);
+    
+    //vkCmdDrawIndexed(cmd, _testMeshes[2]->surfaces[0].count, 1, _testMeshes[2]->surfaces[0].startIndex, 0, 0);
+    */
+    // =========== END DEPRECATED ===========
+
+    VkViewport viewport{
+    .x = 0,
+    .y = 0,
+    .width = static_cast<float>(_drawExtent.width),
+    .height = static_cast<float>(_drawExtent.height),
+    .minDepth = 0.0f,
+    .maxDepth = 1.0f
+    };
+
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{
+        .offset = {},
+        .extent = _drawExtent
+    };
+
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    for (const RenderObject& drawObject : mainDrawContext.opaqueSurfaces) 
+    {
+        // FIXME (TF 18 MAR 2026): (PERF) do not bind for the same objects every frame, keep it cached
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawObject.material->pipeline->pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawObject.material->pipeline->layout, 0, 1, &globalDescriptor, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawObject.material->pipeline->layout, 1, 1, &drawObject.material->materialSet, 0, nullptr);
+    
+        vkCmdBindIndexBuffer(cmd, drawObject.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+        GPUDrawPushConstants pushConstants{
+            .worldMatrix = drawObject.transform,
+            .vertexBuffer = drawObject.vertexBufferAddress
+        };
+        vkCmdPushConstants(cmd, drawObject.material->pipeline->layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &pushConstants);
+
+        vkCmdDrawIndexed(cmd, drawObject.indexCount, 1, drawObject.firstIndex, 0, 0);
+    }
+
     vkCmdEndRendering(cmd);
 }
 
@@ -1163,7 +1251,24 @@ void VulkanEngine::init_default_data()
     materialResources.dataBuffer = materialConstants.buffer;
     materialResources.dataBufferOffset = 0;
 
+    // FIXME (TF 18 MAR 2026): had to add VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, and VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER to globalDescriptorAllocator for it to work with _materialLayout's bindings
     _defaultMaterialData = _metalRoughMaterial.write_material(_device, MaterialPass::MainColor, materialResources, globalDescriptorAllocator);
+
+    for (auto& meshAsset : _testMeshes)
+    {
+        std::shared_ptr<MeshNode> newNode = std::make_shared<MeshNode>();
+        newNode->mesh = meshAsset;
+
+        newNode->localTransform = glm::mat4{ 1.0f };
+        newNode->worldTransform = glm::mat4{ 1.0f };
+
+        for (auto& surface : newNode->mesh->surfaces) 
+        {
+            surface.material = std::make_shared<GLTFMaterial>(_defaultMaterialData);
+        }
+
+        loadedNodes[meshAsset->name] = std::move(newNode);
+    }
 }
 
 void GLTFMetallic_Roughness::build_pipelines(VulkanEngine* engine)
@@ -1231,6 +1336,7 @@ void GLTFMetallic_Roughness::build_pipelines(VulkanEngine* engine)
     vkDestroyShaderModule(engine->_device, meshFragmentShader, nullptr);
 }
 
+// FIXME (TF 18 MAR 2026): the material Pipeline, PipelineLayout, and DescriptorSetLayout are not destroryed during shutdown
 MaterialInstance GLTFMetallic_Roughness::write_material(VkDevice device, MaterialPass pass, const MaterialResources& resources, DescriptorAllocatorGrowable& descriptorAllocator)
 {
     MaterialInstance materialData{};
@@ -1251,4 +1357,26 @@ MaterialInstance GLTFMetallic_Roughness::write_material(VkDevice device, Materia
     writer.update_set(device, materialData.materialSet);
 
     return materialData;
+}
+
+void MeshNode::Draw(const glm::mat4& rootMatrix, DrawContext& ctx)
+{
+    glm::mat4 nodeMatrix = rootMatrix * worldTransform;
+
+    for (auto& surface : mesh->surfaces)
+    {
+        RenderObject renderObject{
+            .indexCount = surface.count,
+            .firstIndex = surface.startIndex,
+            .indexBuffer = mesh->meshBuffers.indexBuffer.buffer,
+            .material = &surface.material->data,
+            .transform = nodeMatrix,
+            .vertexBufferAddress = mesh->meshBuffers.vertexBufferAddress
+        };
+
+        ctx.opaqueSurfaces.push_back(renderObject);
+    }
+
+    // draw any children
+    Node::Draw(rootMatrix, ctx);
 }
