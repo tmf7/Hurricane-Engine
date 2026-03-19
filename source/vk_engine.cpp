@@ -241,7 +241,7 @@ void VulkanEngine::update_scene()
     glm::mat4 modelMatrix = glm::rotate(glm::mat4{ 1.0f }, rotationRate, upAxis);
     // =================== END "ANIMATION" =======================================
 
-    for (int x = -3; x < 3; ++x) 
+    for (int x = -3; x <= 3; ++x) 
     {
         glm::mat4 scale = glm::scale(glm::vec3{0.2f});
         glm::mat4 translation = glm::translate(glm::vec3{x, -1.0f, 0.0f});
@@ -249,15 +249,16 @@ void VulkanEngine::update_scene()
     }
 
     loadedNodes["Suzanne"]->Draw(glm::mat4{ 1.0f } * modelMatrix, mainDrawContext);
-    sceneData.viewMatrix = glm::translate(glm::vec3{ 0.0f, 0.0f, -5.0f });
+    loadedScenes["structure"]->Draw(glm::mat4{ 1.0f }, mainDrawContext);
+
+    mainCamera.Update();
+    sceneData.viewMatrix = mainCamera.GetViewMatrix();
     // PERF: flipping the near and far plane values AND flipping the depth test increases the precision for distant objects
-    sceneData.projectionMatrix = glm::perspective(glm::radians(70.0f), ((float)_windowExtent.width) / ((float)_windowExtent.height), 10000.0f, 0.1f);
+    sceneData.projectionMatrix = glm::perspective(glm::radians(70.0f), ((float)_windowExtent.width) / ((float)_windowExtent.height), 10000.0f , 0.1f);
     // DEBUG (TF 18 MAR 2026): was _drawExtent width/height but caused divide-by-zero error since update_scene called too early for _drawExtent to be defined
 
     // invert y-axis of openGL glTF file to match vulkan's downward y-axis
     sceneData.projectionMatrix[1][1] *= -1.0f;
-
-
     sceneData.viewProjectionMatrix = sceneData.projectionMatrix * sceneData.viewMatrix;
 
     sceneData.ambientColor = glm::vec4{0.1f};
@@ -296,6 +297,18 @@ void VulkanEngine::init()
     init_imgui();
     init_default_data();
 
+    // ========= BEGIN TEST DATA ========
+    mainCamera.velocity = glm::vec3{0.0f};
+    mainCamera.position = glm::vec3{30.0f, 0.0f, -85.0f}; // glm::vec3(0.0f, 0.0f, 5.0f);
+    mainCamera.pitch = 0.0f;
+    mainCamera.yaw = 0.0f;
+
+    std::string structurePath = { "Scenes/structure.glb" };
+    auto structureFile = LoadGLTF(this, structurePath);
+    assert(structureFile.has_value());
+    loadedScenes["structure"] = *structureFile;
+    // ========= END TEST DATA ========
+
     // everything went fine
     _isInitialized = true;
 }
@@ -305,6 +318,8 @@ void VulkanEngine::cleanup()
     if (_isInitialized) {
 
         vkDeviceWaitIdle(_device);
+
+        loadedScenes.clear(); // TODO (TF 19 MAR 2026): actually clean up the loaded scenes data
 
         for (int i = 0; i < FRAME_OVERLAP; ++i) {
             vkDestroyCommandPool(_device, _frames[i]._commandPool, nullptr);
@@ -420,27 +435,29 @@ void VulkanEngine::draw()
 
 void VulkanEngine::run()
 {
-    SDL_Event e;
+    SDL_Event event;
     bool bQuit = false;
 
     // main loop
     while (!bQuit) {
         // Handle events on queue
-        while (SDL_PollEvent(&e) != 0) {
+        while (SDL_PollEvent(&event) != 0) {
             // close the window when user alt-f4s or clicks the X button
-            if (e.type == SDL_EVENT_QUIT) {
+            if (event.type == SDL_EVENT_QUIT) {
                 bQuit = true;
             }
 
-            if (e.window.type == SDL_EVENT_WINDOW_MINIMIZED) {
+            if (event.window.type == SDL_EVENT_WINDOW_MINIMIZED) {
                 stop_rendering = true;
             }
-            if (e.window.type == SDL_EVENT_WINDOW_RESTORED) {
+            if (event.window.type == SDL_EVENT_WINDOW_RESTORED) {
                 stop_rendering = false;
             }
 
+            mainCamera.ProcessSDLEvent(event);
+
             // ======= BEGIN IMGUI UI ========
-            ImGui_ImplSDL3_ProcessEvent(&e);
+            ImGui_ImplSDL3_ProcessEvent(&event);
             // ======= END IMGUI UI ========
         }
 

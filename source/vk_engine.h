@@ -6,6 +6,7 @@
 #include "vk_types.h"
 #include "vk_descriptors.h"
 #include "vk_loader.h"
+#include "camera.h"
 
 struct ComputePushConstants {
 	glm::vec4 data1;
@@ -178,7 +179,9 @@ public:
 	GLTFMetallic_Roughness _metalRoughMaterial;
 
 	DrawContext mainDrawContext;
-	std::unordered_map<std::string, std::shared_ptr<Node>> loadedNodes;
+	std::unordered_map<std::string, std::shared_ptr<Node>> loadedNodes; // DEPRECATED
+	std::unordered_map<std::string, std::shared_ptr<LoadedGLTF>> loadedScenes;
+	Camera mainCamera;
 
 	// ===== BEGIN IMGUI UI ========
 	VkFence _immFence;
@@ -206,6 +209,11 @@ public:
 
 	GPUMeshBuffers uploadMesh(std::span<uint32_t> indies, std::span<Vertex> vertices);
 
+	AllocatedBuffer create_buffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage);
+	AllocatedImage create_image(VkExtent3D size, VkFormat format, VkImageUsageFlags usage, bool mipmapped = false);
+	AllocatedImage create_image(void* data, VkExtent3D size, VkFormat format, VkImageUsageFlags usage, bool mipmapped = false);
+	void destroy_image(const AllocatedImage& image);
+
 private:
 
 	void init_vulkan();
@@ -223,12 +231,7 @@ private:
 	void draw_geometry(VkCommandBuffer cmd);
 	void destroy_buffer(const AllocatedBuffer& buffer);
 	void init_default_data();
-
-	AllocatedBuffer create_buffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage);
-	AllocatedImage create_image(VkExtent3D size, VkFormat format, VkImageUsageFlags usage, bool mipmapped = false);
-	AllocatedImage create_image(void* data, VkExtent3D size, VkFormat format, VkImageUsageFlags usage, bool mipmapped = false);
-	void destroy_image(const AllocatedImage& image);
-
+	
 	void update_scene();
 
 	// ===== BEGIN IMGUI UI ========
