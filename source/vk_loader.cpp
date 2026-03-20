@@ -1,4 +1,5 @@
 ﻿#include "vk_loader.h"
+#define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #include <iostream>
 
@@ -54,15 +55,15 @@ std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(VulkanEngi
 				.count = static_cast<uint32_t>(gltf.accessors[primitive.indicesAccessor.value()].count)
 			};
 
-			uint32_t initial_vtx = static_cast<uint32_t>(vertices.size());
+			uint32_t initialVertex = static_cast<uint32_t>(vertices.size());
 			// load indexes
 			{
 				fastgltf::Accessor& indexAccessor = gltf.accessors[primitive.indicesAccessor.value()];
 				indices.reserve(indices.size() + indexAccessor.count);
 
 				fastgltf::iterateAccessor<uint32_t>(gltf, indexAccessor,
-					[&](uint32_t idx) {
-					indices.push_back(idx + initial_vtx);
+					[&](uint32_t index) {
+					indices.push_back(index + initialVertex);
 				});
 			}
 
@@ -73,7 +74,7 @@ std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(VulkanEngi
 				vertices.resize(vertices.size() + positionAccessor.count);
 
 				fastgltf::iterateAccessorWithIndex<glm::vec3>(gltf, positionAccessor,
-					[&](glm::vec3 position, size_t index) {
+					[&](glm::vec3 position, uint32_t index) {
 					Vertex newVertex{
 						.position = position,
 						.uv_x = 0,
@@ -81,7 +82,7 @@ std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(VulkanEngi
 						.uv_y = 0,
 						.color = glm::vec4{ 1.0f }
 					};
-					vertices[initial_vtx + index] = newVertex;
+					vertices[initialVertex + index] = newVertex;
 				});
 			}
 
@@ -90,8 +91,8 @@ std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(VulkanEngi
 				fastgltf::Attribute* normals = primitive.findAttribute("NORMAL");
 				if (normals != primitive.attributes.end()) {
 					fastgltf::iterateAccessorWithIndex<glm::vec3>(gltf, gltf.accessors[normals->accessorIndex],
-						[&](glm::vec3 normal, size_t index) {
-						vertices[initial_vtx + index].normal = normal;
+						[&](glm::vec3 normal, uint32_t index) {
+						vertices[initialVertex + index].normal = normal;
 					});
 				}
 			}
@@ -101,9 +102,9 @@ std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(VulkanEngi
 				fastgltf::Attribute* uv = primitive.findAttribute("TEXCOORD_0");
 				if (uv != primitive.attributes.end()) {
 					fastgltf::iterateAccessorWithIndex<glm::vec2>(gltf, gltf.accessors[uv->accessorIndex],
-						[&](glm::vec2 uv, size_t index) {
-						vertices[initial_vtx + index].uv_x = uv.x;
-						vertices[initial_vtx + index].uv_y = uv.y;
+						[&](glm::vec2 uv, uint32_t index) {
+						vertices[initialVertex + index].uv_x = uv.x;
+						vertices[initialVertex + index].uv_y = uv.y;
 					});
 				}
 			}
@@ -113,8 +114,8 @@ std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(VulkanEngi
 				fastgltf::Attribute* colors = primitive.findAttribute("COLOR_0");
 				if (colors != primitive.attributes.end()) {
 					fastgltf::iterateAccessorWithIndex<glm::vec4>(gltf, gltf.accessors[colors->accessorIndex],
-						[&](glm::vec4 color, size_t index) {
-						vertices[initial_vtx + index].color = color;
+						[&](glm::vec4 color, uint32_t index) {
+						vertices[initialVertex + index].color = color;
 					});
 				}
 
@@ -146,7 +147,31 @@ void LoadedGLTF::Draw(const glm::mat4& rootMatrix, DrawContext& ctx)
 
 void LoadedGLTF::ClearAll()
 {
-	// TODO (TF 19 FEB 2026): fill this function to destroy all allocations
+	VkDevice device = engine->_device;
+
+	descriptorPool.destroy_pools(device);
+	engine->destroy_buffer(materialDataBuffer);
+
+	for (auto& [key, value] : meshes)
+	{
+		engine->destroy_buffer(value->meshBuffers.indexBuffer);
+		engine->destroy_buffer(value->meshBuffers.vertexBuffer);
+	}
+
+	for (auto& [key, value] : images)
+	{
+		if (value.image == engine->_errorCheckerboardImage.image)
+		{
+			continue;
+		}
+		engine->destroy_image(value);
+	}
+
+	for (auto& sampler : samplers)
+	{
+		vkDestroySampler(device, sampler, nullptr);
+	}
+
 }
 
 VkFilter GetVulkanSamplerFilter(fastgltf::Filter filter)
@@ -181,13 +206,106 @@ VkSamplerMipmapMode GetVulkanMipmapFilter(fastgltf::Filter filter)
 	}
 }
 
+std::optional<AllocatedImage> LoadImage(VulkanEngine* engine, fastgltf::Asset& gltfAsset, fastgltf::Image& gltfImage)
+{
+	AllocatedImage newImage{};
+	int width = 0;
+	int height = 0;
+	int nrChannels = 0;
+
+	fastgltf::visitor imageSourceVisitor{
+		// ==== unhandled source types ====
+		[](auto& arg) {},
+
+		// ==== URI source type ====
+		[&](fastgltf::sources::URI& filePath) {
+			assert(filePath.fileByteOffset == 0); // stbi doesnt' support offsets
+			assert(filePath.uri.isLocalPath()); // stbi can only load local files
+
+			const std::string path(filePath.uri.path().begin(), filePath.uri.path().end());
+			unsigned char* data = stbi_load(path.c_str(), &width, &height, &nrChannels, 4);
+			if (data != nullptr)
+			{
+				VkExtent3D imageSize{
+					.width = static_cast<uint32_t>(width),
+					.height = static_cast<uint32_t>(height),
+					.depth = 1
+				};
+				newImage = engine->create_image(data, imageSize, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT, false);
+				stbi_image_free(data);
+			}
+		},
+
+		// ==== Vector source type====
+		[&](fastgltf::sources::Array& vector) {
+			unsigned char* data = stbi_load_from_memory(reinterpret_cast<const stbi_uc*>(vector.bytes.data()),
+														static_cast<int>(vector.bytes.size()),
+														&width, &height, &nrChannels, 4);
+			if (data != nullptr)
+			{
+				VkExtent3D imageSize{
+					.width = static_cast<uint32_t>(width),
+					.height = static_cast<uint32_t>(height),
+					.depth = 1
+				};
+				newImage = engine->create_image(data, imageSize, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT, false);
+				stbi_image_free(data);
+			}
+		},
+
+		// ====BufferView source type ====
+		[&](fastgltf::sources::BufferView& view) {
+			fastgltf::BufferView& bufferView = gltfAsset.bufferViews[view.bufferViewIndex];
+			fastgltf::Buffer& buffer = gltfAsset.buffers[bufferView.bufferIndex];
+			// TODO (TF 20 MAR 2026): the data exists in a GL buffer, and is copied to a vulkan texture
+			// there may be a more efficient way to avoid the additional data copy
+
+			// from fastgltf examples:
+			// only extract VectorWithMime because fastgltf::Options::LoadExternalBuffers
+			// was specified, so all bufferes are already loaded into a vector
+			fastgltf::visitor bufferCopyVisitor{
+				// ==== unhandled buffer data types ====
+				[](auto& arg) {},
+
+				// ==== Vector buffer data type====
+				[&](fastgltf::sources::Array& vector) {
+					unsigned char* data = stbi_load_from_memory(reinterpret_cast<const stbi_uc*>(vector.bytes.data() + bufferView.byteOffset),
+																static_cast<int>(bufferView.byteLength),
+																&width, &height, &nrChannels, 4);
+					if (data != nullptr)
+					{
+						VkExtent3D imageSize{
+							.width = static_cast<uint32_t>(width),
+							.height = static_cast<uint32_t>(height),
+							.depth = 1
+						};
+						newImage = engine->create_image(data, imageSize, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT, false);
+						stbi_image_free(data);
+					}
+				}
+			};
+
+			std::visit(bufferCopyVisitor, buffer.data);
+		}
+	};
+
+	std::visit(imageSourceVisitor, gltfImage.data);
+
+	if (newImage.image == VK_NULL_HANDLE)
+	{
+		return {};
+	}
+
+	return newImage;
+}
+
 std::optional<std::shared_ptr<LoadedGLTF>> LoadGLTF(VulkanEngine* engine, std::filesystem::path filePath)
 {
 	std::cout << "Loading GLTF: " << filePath << std::endl;
 
 	std::shared_ptr<LoadedGLTF> scene = std::make_shared<LoadedGLTF>();
 	scene->engine = engine;
-	LoadedGLTF& loadedGLTF = *scene.get();
+	LoadedGLTF& loadedGLTF = *(scene.get());
 
 	fastgltf::Expected<fastgltf::GltfDataBuffer> gltfFile = fastgltf::GltfDataBuffer::FromPath(filePath);
 	if (!gltfFile) {
@@ -271,15 +389,27 @@ std::optional<std::shared_ptr<LoadedGLTF>> LoadGLTF(VulkanEngine* engine, std::f
 	}
 
 	// TODO (TF 19 MAR 2026): give these to a class so they can be cleared, instead of re-allocated on each load
+	// DEBUG: everyting from the GLTF file must be loaded in order because all resources are indexed, not named
 	std::vector<AllocatedImage> images;
 	std::vector<std::shared_ptr<GLTFMaterial>> materials;
 	std::vector<std::shared_ptr<MeshAsset>> meshes;
 	std::vector<std::shared_ptr<Node>> nodes;
 
-	// DEBUG: everyting from the GLTF file must be loaded in order because all resources are indexed, not named
-	for (fastgltf::Image& image : gltfAsset.images)
+	for (fastgltf::Image& gltfImage : gltfAsset.images)
 	{
-		images.push_back(engine->_errorCheckerboardImage); // fallback
+		std::optional<AllocatedImage> loadedImage = LoadImage(engine, gltfAsset, gltfImage);
+
+		if (loadedImage.has_value())
+		{
+			images.push_back(*loadedImage);
+			loadedGLTF.images[gltfImage.name.c_str()] = *loadedImage;
+		}
+		else
+		{
+			images.push_back(engine->_errorCheckerboardImage); // fallback
+			std::cout << "glTF failed to load texture " << gltfImage.name << std::endl;
+		}
+
 	}
 
 	// TODO (TF 19 MAR 2026): make material extraction more broad/flexible, for now this can only load one type of material layout
@@ -357,7 +487,7 @@ std::optional<std::shared_ptr<LoadedGLTF>> LoadGLTF(VulkanEngine* engine, std::f
 				.count = static_cast<uint32_t>(gltfAsset.accessors[primitive.indicesAccessor.value()].count)
 			};
 
-			size_t initialVertex = vertices.size();
+			uint32_t initialVertex = static_cast<uint32_t>(vertices.size());
 
 			// load indexes
 			{
@@ -437,6 +567,19 @@ std::optional<std::shared_ptr<LoadedGLTF>> LoadGLTF(VulkanEngine* engine, std::f
 				newSurface.material = materials[0]; // DEBUG: fallback assumes at least one material in file
 			}
 
+			// calculate render bounds
+			glm::vec3 minPos = vertices[initialVertex].position;
+			glm::vec3 maxPos = minPos;
+			for (int i = initialVertex; i < vertices.size(); ++i)
+			{
+				minPos = glm::min(minPos, vertices[i].position);
+				maxPos = glm::max(maxPos, vertices[i].position);
+			}
+
+			newSurface.renderBounds.origin = (maxPos + minPos) * 0.5f;
+			newSurface.renderBounds.extents = (maxPos - minPos) * 0.5f;
+			newSurface.renderBounds.sphereRadius = glm::length(newSurface.renderBounds.extents);
+
 			newMesh->surfaces.push_back(newSurface);
 		}
 
@@ -513,12 +656,10 @@ std::optional<std::shared_ptr<LoadedGLTF>> LoadGLTF(VulkanEngine* engine, std::f
 		if (node->parent.lock() == nullptr)
 		{
 			loadedGLTF.rootNodes.push_back(node);
-			node->RefreshTransform(glm::mat4{ 1.0f });
+			node->RefreshTransform(glm::mat4{ 1.0f }); // TODO (TF 20 MAR 2026): allow for unique root transforms
 		}
 	}
 	// ======================== END LOADING NODES =======================
 
 	return scene; // loadedGLTF
 }
-
-

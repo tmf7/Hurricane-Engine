@@ -228,7 +228,11 @@ void VulkanEngine::destroy_image(const AllocatedImage& image)
 
 void VulkanEngine::update_scene()
 {
+    engineStats.sceneUpdateTime = 0;
+    auto start = std::chrono::system_clock::now();
+
     mainDrawContext.opaqueSurfaces.clear();
+    mainDrawContext.transparentSurfaces.clear();
 
     // ================= BEGIN "ANIMATION" =========================================
     static auto startTime = std::chrono::high_resolution_clock::now();
@@ -265,6 +269,9 @@ void VulkanEngine::update_scene()
     sceneData.sunlightColor = glm::vec4{ 1.0f };
     sceneData.sunlightDirection = glm::vec4{ 0.0f, 1.0f, 0.5f, 1.0f };
 
+    auto end = std::chrono::system_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    engineStats.sceneUpdateTime = elapsed.count() / 1000.0f;
 }
 
 VulkanEngine& VulkanEngine::Get() { return *loadedEngine; }
@@ -319,7 +326,7 @@ void VulkanEngine::cleanup()
 
         vkDeviceWaitIdle(_device);
 
-        loadedScenes.clear(); // TODO (TF 19 MAR 2026): actually clean up the loaded scenes data
+        loadedScenes.clear(); // DEBUG: engine no longer references the material data, so ~LoadedGLTF() is called
 
         for (int i = 0; i < FRAME_OVERLAP; ++i) {
             vkDestroyCommandPool(_device, _frames[i]._commandPool, nullptr);
@@ -339,6 +346,9 @@ void VulkanEngine::cleanup()
         }
 
         _mainDeletionQueue.flush();
+        // DEBUG: loadedScenes (LoadedGLTF::ClearAll) is called in its destructor
+        // which is currently called when the engine instance scope expires 
+        // FIXME (? TF 20 MAR 2026): engine leaves scope after VkInstance descruction, bad?
 
         destroy_swapchain();
         vkDestroySurfaceKHR(_instance, _surface, nullptr);
@@ -440,6 +450,8 @@ void VulkanEngine::run()
 
     // main loop
     while (!bQuit) {
+        auto start = std::chrono::system_clock::now();
+
         // Handle events on queue
         while (SDL_PollEvent(&event) != 0) {
             // close the window when user alt-f4s or clicks the X button
@@ -494,10 +506,21 @@ void VulkanEngine::run()
         }
         ImGui::End();
 
+        ImGui::Begin("Engine Stats");
+        ImGui::Text("Frame time %f ms", engineStats.frametime);
+        ImGui::Text("Draw time %f ms", engineStats.meshDrawTime);
+        ImGui::Text("Scene update time %f ms", engineStats.sceneUpdateTime);
+        ImGui::Text("Triangles %i", engineStats.triangleCount);
+        ImGui::Text("Draw calls %i", engineStats.drawCallCount);
+        ImGui::End();
+
         ImGui::Render();
         // ======= END IMGUI UI ========
 
         draw();
+        auto end = std::chrono::system_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        engineStats.frametime = elapsed.count() / 1000.0f;
     }
 }
 
@@ -684,7 +707,7 @@ void VulkanEngine::create_swapchain(uint32_t width, uint32_t height)
         .set_desired_format(VkSurfaceFormatKHR{ 
             .format = _swapchainImageFormat, 
             .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
-        .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+        .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR) // VK_PRESENT_MODE_MAILBOX_KHR (unlock, but hot)
         .set_desired_extent(width, height)
         .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
         .build()
@@ -962,8 +985,85 @@ void VulkanEngine::init_mesh_pipeline()
     });
 }
 
+bool IsVisible(const RenderObject& renderObject, const glm::mat4& viewProjectionMatrix)
+{
+    std::array<glm::vec3, 8> corners{
+        glm::vec3{ 1.0f, 1.0f, 1.0f },
+        glm::vec3{ 1.0f, 1.0f, -1.0f },
+        glm::vec3{ 1.0f, -1.0f, 1.0f },
+        glm::vec3{ 1.0f, -1.0f, -1.0f },
+        glm::vec3{ -1.0f, 1.0f, 1.0f },
+        glm::vec3{ -1.0f, 1.0f, -1.0f },
+        glm::vec3{ -1.0f, -1.0f, 1.0f },
+        glm::vec3{ -1.0f, -1.0f, -1.0f },
+    };
+
+    glm::mat4 clipSpaceMatrix = viewProjectionMatrix * renderObject.transform;
+    glm::vec3 min = { 1.5f, 1.5f, 1.5f };
+    glm::vec3 max = { -1.5f, -1.5f, -1.5f };
+
+    for (int i = 0; i < 8; ++i)
+    {
+        glm::vec4 clipSpaceCorner = clipSpaceMatrix * glm::vec4(renderObject.renderBounds.origin + (corners[i] * renderObject.renderBounds.extents), 1.0f);
+        
+        float perspectiveCorrection = 1.0f / clipSpaceCorner.w;
+        clipSpaceCorner *= perspectiveCorrection;
+
+        min = glm::min(glm::vec3{ clipSpaceCorner.x, clipSpaceCorner.y, clipSpaceCorner.z }, min);
+        max = glm::max(glm::vec3{ clipSpaceCorner.x, clipSpaceCorner.y, clipSpaceCorner.z }, max);
+    }
+
+    // TODO (TF 20 MAR 2026): there are faster culling algorithms,
+    // also this one has false-positives where non-visible object will still be drawn
+    return (min.z <= 1.0f && max.z >= 0.0f 
+         && min.x <= 1.0f && max.x >= -1.0f
+         && min.y <= 1.0f && max.y >= -1.0f);
+}
+
+std::span<uint32_t> GetCulledDraws(std::span<RenderObject> renderObjects, glm::mat4 viewProjectionMatrix)
+{
+    static std::vector<uint32_t> culledDraws;
+    culledDraws.clear();
+
+    culledDraws.reserve(renderObjects.size());
+
+    for (uint32_t i = 0; i < renderObjects.size(); ++i)
+    {
+        if (IsVisible(renderObjects[i], viewProjectionMatrix))
+        {
+            culledDraws.push_back(i);
+        }
+    }
+
+    return culledDraws;
+}
+
+// sort opaque draws by locality of material and mesh memory
+void SortDraws(std::span<uint32_t> indexes, std::span<RenderObject> renderObjects)
+{
+    // TODO (TF 20 MAR 2026): sort faster by removing if-else in favor
+    // of a sorting hash and draw index per item
+    std::sort(indexes.begin(), indexes.end(),
+             [&](const auto& lhsIndex, const auto& rhsIndex) {
+                const RenderObject& lhs = renderObjects[lhsIndex];
+                const RenderObject& rhs = renderObjects[rhsIndex];
+                if (lhs.material == rhs.material)
+                {
+                    return lhs.indexBuffer < rhs.indexBuffer;
+                }
+                else
+                {
+                    return lhs.material < rhs.material;
+                }
+             });
+}
+
 void VulkanEngine::draw_geometry(VkCommandBuffer cmd)
 {
+    engineStats.drawCallCount = 0;
+    engineStats.triangleCount = 0;
+    auto start = std::chrono::system_clock::now();
+
     // ===== BEGIN DYNAMIC BUFFER ALLOCATION ===============================
     // TODO (TF 16 MAR 2026): It would be better to cache these buffers in the FrameData structure
     // ...currently only allocated each frame to demo temp/dynamic per-frame data.
@@ -987,106 +1087,82 @@ void VulkanEngine::draw_geometry(VkCommandBuffer cmd)
     VkRenderingInfo renderInfo = vkinit::rendering_info(_drawExtent, &colorAttachment, &depthAttachment);
     vkCmdBeginRendering(cmd, &renderInfo);
 
-    // =========== BEGIN DEPRECATED ===========
-    /* 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipeline);
+    // PERF: only rebind if necessary
+    MaterialPipeline* lastPipeline = nullptr;
+    MaterialInstance* lastMaterial = nullptr;
+    VkBuffer lastIndexBuffer = VK_NULL_HANDLE;
 
-    VkDescriptorSet imageSet = get_current_frame()._frameDescriptors.allocate(_device, _singleImageDescriptorLayout);
-    {
-        DescriptorWriter writer;
-        writer.write_image(0, _errorCheckerboardImage.imageView, _defaultSamplerNearest, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
-        writer.update_set(_device, imageSet);
-    }
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipelineLayout, 0, 1, &imageSet, 0, nullptr);
+    auto draw = [&](const RenderObject& renderObject) {
+        if (renderObject.material != lastMaterial)
+        {
+            lastMaterial = renderObject.material;
 
-    GPUDrawPushConstants push_constants;
+            if (renderObject.material->pipeline != lastPipeline)
+            {
+                lastPipeline = renderObject.material->pipeline;
 
-    // ================= BEGIN "ANIMATION" =========================================
-    static auto startTime = std::chrono::high_resolution_clock::now();
+                VkViewport viewport{
+                    .x = 0,
+                    .y = 0,
+                    .width = static_cast<float>(_drawExtent.width),
+                    .height = static_cast<float>(_drawExtent.height),
+                    .minDepth = 0.0f,
+                    .maxDepth = 1.0f
+                };
 
-    auto currentTime = std::chrono::high_resolution_clock::now();
-    float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
-    
-    glm::f32 rotationRate = time * glm::radians(90.0f);
-    glm::vec3 upAxis = glm::vec3(0.0f, 1.0f, 0.0f);
-    glm::mat4 modelMatrix = glm::rotate(glm::mat4{ 1.0f }, rotationRate, upAxis);
-    // =================== END "ANIMATION" =======================================
-    glm::mat4 viewMatrix = 
-        //glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), upAxis);
-        glm::translate(glm::vec3{0.0f, 0.0f, -5.0f});
+                vkCmdSetViewport(cmd, 0, 1, &viewport);
 
-    // PERF: flipping the near and far plane values AND flipping the depth test increases the precision for distant objects
-    glm::mat4 projectionMatrix = glm::perspective(glm::radians(70.0f), ((float)_drawExtent.width) / ((float)_drawExtent.height), 10000.0f, 0.1f);
+                VkRect2D scissor{
+                    .offset = {},
+                    .extent = _drawExtent
+                };
 
-    // invert y-axis of openGL glTF file to match vulkan's downward y-axis
-    projectionMatrix[1][1] *= -1.0f;
+                vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    push_constants.worldMatrix = projectionMatrix * viewMatrix * modelMatrix;
-    push_constants.vertexBuffer = _testMeshes[2]->meshBuffers.vertexBufferAddress;
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, renderObject.material->pipeline->pipeline);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, renderObject.material->pipeline->layout, 0, 1, &globalDescriptor, 0, nullptr);
+            }
 
-    vkCmdPushConstants(cmd, _meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &push_constants);
-    vkCmdBindIndexBuffer(cmd, _testMeshes[2]->meshBuffers.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, renderObject.material->pipeline->layout, 1, 1, &renderObject.material->materialSet, 0, nullptr);
+        }
 
-    VkViewport viewport{
-        .x = 0,
-        .y = 0,
-        .width = static_cast<float>(_drawExtent.width),
-        .height = static_cast<float>(_drawExtent.height),
-        .minDepth = 0.0f,
-        .maxDepth = 1.0f
-    };
-
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-    VkRect2D scissor{
-        .offset = {},
-        .extent = _drawExtent
-    };
-
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-    
-    //vkCmdDrawIndexed(cmd, _testMeshes[2]->surfaces[0].count, 1, _testMeshes[2]->surfaces[0].startIndex, 0, 0);
-    */
-    // =========== END DEPRECATED ===========
-
-    VkViewport viewport{
-    .x = 0,
-    .y = 0,
-    .width = static_cast<float>(_drawExtent.width),
-    .height = static_cast<float>(_drawExtent.height),
-    .minDepth = 0.0f,
-    .maxDepth = 1.0f
-    };
-
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-    VkRect2D scissor{
-        .offset = {},
-        .extent = _drawExtent
-    };
-
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-    for (const RenderObject& drawObject : mainDrawContext.opaqueSurfaces) 
-    {
-        // FIXME (TF 18 MAR 2026): (PERF) do not bind for the same objects every frame, keep it cached
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawObject.material->pipeline->pipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawObject.material->pipeline->layout, 0, 1, &globalDescriptor, 0, nullptr);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawObject.material->pipeline->layout, 1, 1, &drawObject.material->materialSet, 0, nullptr);
-    
-        vkCmdBindIndexBuffer(cmd, drawObject.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+        if (renderObject.indexBuffer != lastIndexBuffer)
+        {
+            lastIndexBuffer = renderObject.indexBuffer;
+            vkCmdBindIndexBuffer(cmd, renderObject.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+        }
 
         GPUDrawPushConstants pushConstants{
-            .worldMatrix = drawObject.transform,
-            .vertexBuffer = drawObject.vertexBufferAddress
+            .worldMatrix = renderObject.transform,
+            .vertexBuffer = renderObject.vertexBufferAddress
         };
-        vkCmdPushConstants(cmd, drawObject.material->pipeline->layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &pushConstants);
+        vkCmdPushConstants(cmd, renderObject.material->pipeline->layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &pushConstants);
 
-        vkCmdDrawIndexed(cmd, drawObject.indexCount, 1, drawObject.firstIndex, 0, 0);
+        vkCmdDrawIndexed(cmd, renderObject.indexCount, 1, renderObject.firstIndex, 0, 0);
+        engineStats.drawCallCount++;
+        engineStats.triangleCount += renderObject.indexCount / 3;
+    };
+
+    // draw sorted opaques first
+    std::span<uint32_t> culledDraws = GetCulledDraws(mainDrawContext.opaqueSurfaces, sceneData.viewProjectionMatrix);
+    SortDraws(culledDraws, mainDrawContext.opaqueSurfaces);
+    for (auto& index : culledDraws)
+    {
+        draw(mainDrawContext.opaqueSurfaces[index]);
+    }
+
+    // draw transparents second
+    culledDraws = GetCulledDraws(mainDrawContext.transparentSurfaces, sceneData.viewProjectionMatrix);
+    SortDraws(culledDraws, mainDrawContext.transparentSurfaces);
+    for (auto& index : culledDraws)
+    {
+        draw(mainDrawContext.transparentSurfaces[index]);
     }
 
     vkCmdEndRendering(cmd);
+    auto end = std::chrono::system_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    engineStats.meshDrawTime = elapsed.count() / 1000.0f;
 }
 
 AllocatedBuffer VulkanEngine::create_buffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage)
@@ -1351,9 +1427,20 @@ void GLTFMetallic_Roughness::build_pipelines(VulkanEngine* engine)
 
     vkDestroyShaderModule(engine->_device, meshVertexShader, nullptr);
     vkDestroyShaderModule(engine->_device, meshFragmentShader, nullptr);
+
+    engine->_mainDeletionQueue.push_function([=, this]() {
+        this->clear_resources(engine->_device);
+    });
 }
 
-// FIXME (TF 18 MAR 2026): the material Pipeline, PipelineLayout, and DescriptorSetLayout are not destroryed during shutdown
+void GLTFMetallic_Roughness::clear_resources(VkDevice device)
+{
+    vkDestroyDescriptorSetLayout(device, _materialLayout, nullptr);
+    vkDestroyPipelineLayout(device, opaquePipeline.layout, nullptr); // DEBUG: same layout as transparentPipeline
+    vkDestroyPipeline(device, opaquePipeline.pipeline, nullptr);
+    vkDestroyPipeline(device, transparentPipeline.pipeline, nullptr);
+}
+
 MaterialInstance GLTFMetallic_Roughness::write_material(VkDevice device, MaterialPass pass, const MaterialResources& resources, DescriptorAllocatorGrowable& descriptorAllocator)
 {
     MaterialInstance materialData{};
@@ -1364,7 +1451,7 @@ MaterialInstance GLTFMetallic_Roughness::write_material(VkDevice device, Materia
     else {
         materialData.pipeline = &opaquePipeline;
     }
-
+    
     materialData.materialSet = descriptorAllocator.allocate(device, _materialLayout);
 
     writer.clear();
@@ -1387,11 +1474,26 @@ void MeshNode::Draw(const glm::mat4& rootMatrix, DrawContext& ctx)
             .firstIndex = surface.startIndex,
             .indexBuffer = mesh->meshBuffers.indexBuffer.buffer,
             .material = &surface.material->data,
+            .renderBounds = surface.renderBounds,
             .transform = nodeMatrix,
             .vertexBufferAddress = mesh->meshBuffers.vertexBufferAddress
         };
 
-        ctx.opaqueSurfaces.push_back(renderObject);
+        switch (surface.material->data.passType)
+        {
+            case MaterialPass::Transparent:
+            {
+                ctx.transparentSurfaces.push_back(renderObject);
+
+                break;
+            }
+            case MaterialPass::MainColor:
+            default:
+            {
+                ctx.opaqueSurfaces.push_back(renderObject);
+                break;
+            }
+        }
     }
 
     // draw any children

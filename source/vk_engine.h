@@ -103,6 +103,7 @@ struct RenderObject
 	uint32_t firstIndex;
 	VkBuffer indexBuffer;
 	MaterialInstance* material;
+	Bounds renderBounds;
 	glm::mat4 transform;
 	VkDeviceAddress vertexBufferAddress;
 };
@@ -110,6 +111,16 @@ struct RenderObject
 struct DrawContext
 {
 	std::vector<RenderObject> opaqueSurfaces;
+	std::vector<RenderObject> transparentSurfaces;
+};
+
+struct EngineStats 
+{
+	float frametime;
+	int triangleCount;
+	int drawCallCount;
+	float sceneUpdateTime;
+	float meshDrawTime;
 };
 
 constexpr unsigned int FRAME_OVERLAP = 2;
@@ -160,7 +171,6 @@ public:
 	VkPipelineLayout _meshPipelineLayout;
 	VkPipeline _meshPipeline;
 
-	std::vector<std::shared_ptr<MeshAsset>> _testMeshes;
 	bool _resizeRequested;
 
 	GPUSceneData sceneData;
@@ -175,6 +185,7 @@ public:
 	VkSampler _defaultSamplerLinear;
 	VkSampler _defaultSamplerNearest;
 
+	std::vector<std::shared_ptr<MeshAsset>> _testMeshes;
 	MaterialInstance _defaultMaterialData;
 	GLTFMetallic_Roughness _metalRoughMaterial;
 
@@ -182,6 +193,8 @@ public:
 	std::unordered_map<std::string, std::shared_ptr<Node>> loadedNodes; // DEPRECATED
 	std::unordered_map<std::string, std::shared_ptr<LoadedGLTF>> loadedScenes;
 	Camera mainCamera;
+
+	EngineStats engineStats;
 
 	// ===== BEGIN IMGUI UI ========
 	VkFence _immFence;
@@ -213,6 +226,7 @@ public:
 	AllocatedImage create_image(VkExtent3D size, VkFormat format, VkImageUsageFlags usage, bool mipmapped = false);
 	AllocatedImage create_image(void* data, VkExtent3D size, VkFormat format, VkImageUsageFlags usage, bool mipmapped = false);
 	void destroy_image(const AllocatedImage& image);
+	void destroy_buffer(const AllocatedBuffer& buffer);
 
 private:
 
@@ -229,7 +243,6 @@ private:
 	void init_background_pipelines();
 	void init_mesh_pipeline();
 	void draw_geometry(VkCommandBuffer cmd);
-	void destroy_buffer(const AllocatedBuffer& buffer);
 	void init_default_data();
 	
 	void update_scene();

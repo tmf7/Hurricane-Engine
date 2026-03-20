@@ -9,9 +9,16 @@ struct GLTFMaterial {
 	MaterialInstance data;
 };
 
+struct Bounds {
+	glm::vec3 origin;
+	float sphereRadius;
+	glm::vec3 extents;
+};
+
 struct GeoSurface {
 	uint32_t startIndex;
 	uint32_t count;
+	Bounds renderBounds;
 	std::shared_ptr<GLTFMaterial> material;
 };
 
@@ -42,6 +49,8 @@ public:
 	DescriptorAllocatorGrowable descriptorPool;
 	AllocatedBuffer materialDataBuffer;
 
+	// TODO (TF 20 MAR 2026): add runtim deletion either via VkQueueWait for resources to be available
+	// or use the per-frame deletion queue lambda capture (similarly)
 	~LoadedGLTF() { ClearAll(); }
 
 	virtual void Draw(const glm::mat4& rootMatrix, DrawContext& ctx);
