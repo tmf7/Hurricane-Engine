@@ -208,6 +208,7 @@ VkSamplerMipmapMode GetVulkanMipmapFilter(fastgltf::Filter filter)
 
 std::optional<AllocatedImage> LoadImage(VulkanEngine* engine, fastgltf::Asset& gltfAsset, fastgltf::Image& gltfImage)
 {
+	bool generateMipmaps = true;
 	AllocatedImage newImage{};
 	int width = 0;
 	int height = 0;
@@ -231,7 +232,7 @@ std::optional<AllocatedImage> LoadImage(VulkanEngine* engine, fastgltf::Asset& g
 					.height = static_cast<uint32_t>(height),
 					.depth = 1
 				};
-				newImage = engine->create_image(data, imageSize, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT, false);
+				newImage = engine->create_image(data, imageSize, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT, generateMipmaps);
 				stbi_image_free(data);
 			}
 		},
@@ -248,7 +249,7 @@ std::optional<AllocatedImage> LoadImage(VulkanEngine* engine, fastgltf::Asset& g
 					.height = static_cast<uint32_t>(height),
 					.depth = 1
 				};
-				newImage = engine->create_image(data, imageSize, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT, false);
+				newImage = engine->create_image(data, imageSize, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT, generateMipmaps);
 				stbi_image_free(data);
 			}
 		},
@@ -279,7 +280,7 @@ std::optional<AllocatedImage> LoadImage(VulkanEngine* engine, fastgltf::Asset& g
 							.height = static_cast<uint32_t>(height),
 							.depth = 1
 						};
-						newImage = engine->create_image(data, imageSize, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT, false);
+						newImage = engine->create_image(data, imageSize, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT, generateMipmaps);
 						stbi_image_free(data);
 					}
 				}
