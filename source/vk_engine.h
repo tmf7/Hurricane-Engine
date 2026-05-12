@@ -156,7 +156,7 @@ public:
 	VmaAllocator _allocator;
 
 	AllocatedImage _drawImage;
-	AllocatedImage _depthImage;
+	AllocatedImage _depthImage; // TODO (TF 12 APR 2026): create _depthImage with mipLevels, then use compute shader to fill levels...via ImageViews (then use a separate image/imageviews so 0th mip is actually downsampled _depthImage already)
 	VkExtent2D _drawExtent;
 	float _renderScale = 1.0f;
 
@@ -184,6 +184,7 @@ public:
 
 	VkSampler _defaultSamplerLinear;
 	VkSampler _defaultSamplerNearest;
+	VkSampler _depthSamplerHZB;
 
 	std::vector<std::shared_ptr<MeshAsset>> _testMeshes;
 	MaterialInstance _defaultMaterialData;

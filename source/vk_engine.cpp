@@ -415,7 +415,9 @@ void VulkanEngine::draw()
 
     vkutil::transition_image(cmd, _swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
+    // ======= BEGIN IMGUI UI ========
     draw_imgui(cmd, _swapchainImageViews[swapchainImageIndex]);
+    // ======= END IMGUI UI ========
 
     vkutil::transition_image(cmd, _swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
@@ -561,6 +563,7 @@ void VulkanEngine::init_vulkan()
     features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
     features12.bufferDeviceAddress = true;
     features12.descriptorIndexing = true;
+    features12.samplerFilterMinmax = true; // Hierarchical Z-Buffer sampler extension to avoid manual sampling (supported since 1.2)
 
     // abstract physical device selection and logical device creation using vk-bootstrap
     vkb::PhysicalDeviceSelector selector{ vkb_inst };
@@ -568,6 +571,7 @@ void VulkanEngine::init_vulkan()
         .set_minimum_version(1, 3)
         .set_required_features_13(features13)
         .set_required_features_12(features12)
+        .add_required_extension(VK_EXT_SAMPLER_FILTER_MINMAX_EXTENSION_NAME) // Hierarchical Z-Buffer sampler extension to avoid manual sampling (supported since 1.2)
         .set_surface(_surface)
         .select()
         .value();
@@ -628,9 +632,30 @@ void VulkanEngine::init_swapchain()
 
     VkImageUsageFlags depthImageUsages{};
     depthImageUsages |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    // Hierarcical Z-Buffer mipmap generation
+    depthImageUsages |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    depthImageUsages |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    // Hierarcical Z-Buffer occlusion sampling
+    depthImageUsages |= VK_IMAGE_USAGE_SAMPLED_BIT; 
+
+    // TODO: ensure depth pyramid texture format supports VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_MINMAX_BIT_EXT using vkGetPhysicalDeviceFormatPropertiesEXT 
+    VkFormatProperties2KHR formatProperties{
+        .sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2_KHR,
+        .pNext = nullptr,
+        .formatProperties = {}
+    };
+
+    vkGetPhysicalDeviceFormatProperties2(_chosenGPU, _depthImage.imageFormat, &formatProperties);
+    if ((formatProperties.formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_MINMAX_BIT_EXT) == VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_MINMAX_BIT_EXT)
+    {
+        // TODO (TF 12 MAY 2026): fallback to manual depth image sampling for mipmap generation if format feature is not supported
+        std::cout << "VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_MINMAX_BIT_EXT is **Supported** by VK_FORMAT_D32_SFLOAT on this GPU" << std::endl;
+    }
 
     VkImageCreateInfo rimg_info = vkinit::image_create_info(_drawImage.imageFormat, drawImageUsages, drawImageExtent);
     VkImageCreateInfo dimg_info = vkinit::image_create_info(_depthImage.imageFormat, depthImageUsages, drawImageExtent);
+    dimg_info.mipLevels = 1; // TODO (TF 12 MAY 2026): *** stopped here ***, depth texture must support enough mips to get down to a single depth texel
+
 
     // abstract image allocation and binding with VulkanMemoryAllocator
     VmaAllocationCreateInfo img_allocInfo = {};
@@ -1323,9 +1348,42 @@ void VulkanEngine::init_default_data()
     samplerInfo.magFilter = VK_FILTER_LINEAR;
     vkCreateSampler(_device, &samplerInfo, nullptr, &_defaultSamplerLinear);
 
+    // Hierarcical Z-Buffer sampler
+    // Depth values go from 1.0f at the near plane to 0.0f at the far plane, 
+    // therefore sampling the MIN of a 2x2 kernel ensures the HIGHEST mipmap level contains the farthest depth values (near 0.0f)
+    VkSamplerReductionModeCreateInfoEXT reductionCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_REDUCTION_MODE_CREATE_INFO_EXT,
+        .pNext = nullptr,
+        .reductionMode = VK_SAMPLER_REDUCTION_MODE_MIN
+    };
+
+    VkSamplerCreateInfo depthSamplerInfo{
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .pNext = nullptr, // TODO: give this the depth sampler extension create info
+        .flags = 0,
+        .magFilter = VK_FILTER_LINEAR, // ensures a 2x2 kernel size during sampling
+        .minFilter = VK_FILTER_LINEAR, // ensures a 2x2 kernel size during sampling
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        // .mipLodBias = 0.0f,
+        // .anisotropyEnable = VK_FALSE,
+        // .maxAnisotropy = 0.0f,
+        // .compareEnable = VK_FALSE,
+        // .compareOp = VK_COMPARE_OP_NEVER,
+        .minLod = 0.0f,
+        .maxLod = VK_LOD_CLAMP_NONE,
+        // .borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK,
+        // .unnormalizedCoordinates = VK_FALSE
+    };
+     
+    vkCreateSampler(_device, &depthSamplerInfo, nullptr, &_depthSamplerHZB);
+
     _mainDeletionQueue.push_function([&]() {
         vkDestroySampler(_device, _defaultSamplerNearest, nullptr);
         vkDestroySampler(_device, _defaultSamplerLinear, nullptr);
+        vkDestroySampler(_device, _depthSamplerHZB, nullptr);
 
         destroy_image(_whiteImage);
         destroy_image(_greyImage);
