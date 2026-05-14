@@ -635,11 +635,175 @@ void VulkanEngine::init_depthPyramidHZB(int32_t mipLevels)
             sourceTarget.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         }
 
+        // ============ BEGIN DESCRIPTOR SET SETUP ============
+        std::array<VkDescriptorPoolSize, 2> poolSizes = {
+            {{
+                .type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                .descriptorCount = 1
+            },
+            {
+                .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1
+            }}
+        };
+
+        VkDescriptorPoolCreateInfo poolCreateInfo {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .maxSets = 2,
+            .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+            .pPoolSizes = poolSizes.data()
+        };
+
+        VkDescriptorPool depthMipmapDescriptorPoolHZB{};
+        vkCreateDescriptorPool(_device, &poolCreateInfo, nullptr, &depthMipmapDescriptorPoolHZB);
+        // ===========
+        std::array<VkDescriptorSetLayoutBinding, 2> bindings = {
+            {{
+                .binding = 0,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+                .pImmutableSamplers = nullptr
+             },
+             {
+                .binding = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+                .pImmutableSamplers = nullptr
+             }}
+        };
+
+        VkDescriptorSetLayoutCreateInfo layoutCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .bindingCount = static_cast<uint32_t>(bindings.size()),
+            .pBindings = bindings.data()
+        };
+        
+        VkDescriptorSetLayout depthMipmapDescriptorLayoutHZB{};
+        vkCreateDescriptorSetLayout(_device, &layoutCreateInfo, nullptr, &depthMipmapDescriptorLayoutHZB);
+        // ===========
+        VkDescriptorSetAllocateInfo allocateInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .pNext = nullptr,
+            .descriptorPool = depthMipmapDescriptorPoolHZB,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &depthMipmapDescriptorLayoutHZB
+        };
+
+
+        VkDescriptorSet depthMipmapDescriptorSetHZB{};
+        vkAllocateDescriptorSets(_device, &allocateInfo, &depthMipmapDescriptorSetHZB);
+        // ===========
+        VkDescriptorImageInfo sourceImage {
+            .sampler = VK_NULL_HANDLE, // FIXME(?)(TF 14 MAY 2026): should this be _depthSamplerHZB if read-only?
+            .imageView = _depthImage.imageView, // TODO (TF 14 MAY 2026): loop on the view being bound
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL // // TODO (TF 14 MAY 2026): switch layout for other mip levels
+        };
+
+        VkDescriptorImageInfo targetImage{
+            .sampler = _depthSamplerHZB,
+            .imageView = _depthImageMipMapViews[0], // TODO (TF 14 MAY 2026): loop on the view being bound
+            .imageLayout = VK_IMAGE_LAYOUT_GENERAL // // TODO (TF 14 MAY 2026): switch layout for other mip levels
+        };
+
+        std::array<VkWriteDescriptorSet, 2> descriptorWrites = {
+            {{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstSet = depthMipmapDescriptorSetHZB,
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                .pImageInfo = &sourceImage,
+                .pBufferInfo = nullptr,
+                .pTexelBufferView = nullptr
+            },
+            {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstSet = depthMipmapDescriptorSetHZB,
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &targetImage,
+                .pBufferInfo = nullptr,
+                .pTexelBufferView = nullptr
+            }}
+        };
+
+        vkUpdateDescriptorSets(_device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+        // ============ END DESCRIPTOR SET SETUP ============
+        // ============ BEGIN COMPUTE PIPELINE SETUP ============       
+        VkPushConstantRange pushConstants{
+            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+            .offset = 0,
+            .size = sizeof(glm::vec2) // TODO (TF 14 MAY 2026): this may need to be a padded struct (2 floats may not be aligned correctly)
+        };
+
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .setLayoutCount = 1,
+            .pSetLayouts = &depthMipmapDescriptorLayoutHZB,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &pushConstants
+        };
+
+        VkPipelineLayout depthMipmapsPipelineLayoutHZB{};
+        vkCreatePipelineLayout(_device, &pipelineLayoutInfo, nullptr, &depthMipmapsPipelineLayoutHZB);
+
+        VkPipelineShaderStageCreateInfo pipelineShaderStageInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+            .module = VK_NULL_HANDLE, // TODO (TF 14 MAY 2026): write a compute shader, create ShaderModule
+            .pName = "main",
+            .pSpecializationInfo = nullptr
+        };
+
+        VkComputePipelineCreateInfo computePipelineInfo{
+            .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = pipelineShaderStageInfo,
+            .layout = depthMipmapsPipelineLayoutHZB,
+            .basePipelineHandle = VK_NULL_HANDLE,
+            .basePipelineIndex = 0
+        };
+
+        // TODO (TF 14 MAY 2026): bind the compute pipeline before the loop because the same shader is used for all levels
+        VkPipeline depthMipmapPipelineHZB{};
+        vkCreateComputePipelines(_device, VK_NULL_HANDLE, 1, &computePipelineInfo, nullptr, &depthMipmapPipelineHZB);
+        // ============ END COMPUTE PIPELINE SETUP ============
+        
+         
         // TODO (TF 13 MAY 2026): **stopped here** now that depth has allocated miplevels and all mip imageViews are created
          // submit the views to a compute shader with the custom sampler to FILL the miplevels
         // IE: create the DescriptoSetLayout, the DescriptorSet, Write to the DescriptorSet, and dispatch a compute shader
         // .. may require a new descriptor pool allocation layout
         // also bind a push constant for the reduction ratio for that level
+
+    /*
+        FLOW:
+        1. Create a VkDescriptorPool using VkDescriptorPoolSize of expected bindings
+        2. Create a VkDescriptorLayout using VkDescriptorSetLayoutBindings (specific bind points and stages, NOT specific data)
+        3. Allocate a VkDescriptorSet from the VkDescriptorPool using the VkDescriptorLayout in VkDescriptorSetAllocateInfo
+        4. Call vkUpdateDescriptorSets using a set of VkWriteDescriptorSet (containing specific data handles in VkDescriptorImageInfo / VkDescriptorBufferInfo)
+
+        // VK_KHR_dynamic_rendering_local_read for performant subpass read/write logic formerly in renderpasses
+        1. Create a VkPipelineLayout using VkPipelineLayoutCreateInfo of expected PushConstant footprint
+        2. Create a VkPipeline using the VkPipelineLayout
+        3. vkCmdBindPipeline -> VkCmdBindDescriptorSets -> vkCmdPushConstants -> vkCmdDispatch, vkCmdDrawIndexed, vkCmdDrawIndexedIndirect, etc
+    */
     }
 }
 
@@ -837,7 +1001,7 @@ void VulkanEngine::draw_background(VkCommandBuffer cmd)
 }
 
 void VulkanEngine::init_descriptors()
-{
+{ 
     std::vector<DescriptorAllocatorGrowable::PoolSizeRatio> sizes =
     {
         { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 },

@@ -104,6 +104,8 @@ VkSubmitInfo2 vkinit::submit_info(VkCommandBufferSubmitInfo* cmd, VkSemaphoreSub
 }
 //< init_submit
 
+/*
+ === BEGIN DEPRECATED ===
 VkPresentInfoKHR vkinit::present_info()
 {
     VkPresentInfoKHR info = {};
@@ -118,6 +120,8 @@ VkPresentInfoKHR vkinit::present_info()
 
     return info;
 }
+ === END DEPRECATED ===
+*/
 
 //> color_info
 VkRenderingAttachmentInfo vkinit::attachment_info(VkImageView view, VkClearValue* clear ,VkImageLayout layout /*= VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL*/)
@@ -179,6 +183,8 @@ VkRenderingInfo vkinit::rendering_info(VkExtent2D renderExtent, VkRenderingAttac
 }
 //< render_info
 //> subresource
+/*
+=== BEGIN DEPRECATED ===
 VkImageSubresourceRange vkinit::image_subresource_range(VkImageAspectFlags aspectMask)
 {
     VkImageSubresourceRange subImage {};
@@ -191,7 +197,6 @@ VkImageSubresourceRange vkinit::image_subresource_range(VkImageAspectFlags aspec
     return subImage;
 }
 //< subresource
-
 
 
 VkDescriptorSetLayoutBinding vkinit::descriptorset_layout_binding(VkDescriptorType type, VkShaderStageFlags stageFlags, uint32_t binding)
@@ -257,6 +262,8 @@ VkDescriptorBufferInfo vkinit::buffer_info(VkBuffer buffer, VkDeviceSize offset,
     binfo.range = range;
     return binfo;
 }
+=== END DEPRECATED ===
+*/
 
 //> image_set
 VkImageCreateInfo vkinit::image_create_info(VkFormat format, VkImageUsageFlags usageFlags, VkExtent3D extent)

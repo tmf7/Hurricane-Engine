@@ -7,6 +7,14 @@ void vkutil::transition_image(VkCommandBuffer cmd, VkImage image, VkImageLayout 
                                     ? VK_IMAGE_ASPECT_DEPTH_BIT 
                                     : VK_IMAGE_ASPECT_COLOR_BIT;
 
+	VkImageSubresourceRange imageSubresourceRange {
+		.aspectMask = aspectMask,
+		.baseMipLevel = 0,
+		.levelCount = VK_REMAINING_MIP_LEVELS,
+		.baseArrayLayer = 0,
+		.layerCount = VK_REMAINING_ARRAY_LAYERS
+	};
+
 	VkImageMemoryBarrier2 imageBarrier {
 		.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
 		.pNext = nullptr,
@@ -19,7 +27,7 @@ void vkutil::transition_image(VkCommandBuffer cmd, VkImage image, VkImageLayout 
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, // FIXME (TF 25 FEB 2026): use 0?
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, // FIXME (TF 25 FEB 2026): use 0?
         .image = image,
-        .subresourceRange = vkinit::image_subresource_range(aspectMask)
+        .subresourceRange = imageSubresourceRange
 	};
 
 	VkDependencyInfo depInfo {
