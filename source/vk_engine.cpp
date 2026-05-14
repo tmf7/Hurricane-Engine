@@ -164,7 +164,7 @@ AllocatedImage VulkanEngine::create_image(VkExtent3D size, VkFormat format, VkIm
     // assign image, imageView, and allocation
     VkImageCreateInfo img_info = vkinit::image_create_info(format, usage, size);
     if (mipmapped) {
-        img_info.mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(size.width, size.height)))) + 1;
+        img_info.mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(size.width, size.height))) + 1);
     }
 
     VmaAllocationCreateInfo allocInfo{
@@ -607,6 +607,42 @@ void VulkanEngine::init_vulkan()
     });
 }
 
+void VulkanEngine::init_depthPyramidHZB(int32_t mipLevels)
+{
+    for (int32_t i = 0; i < mipLevels; ++i)
+    {
+        VkDescriptorImageInfo destTarget{
+            .sampler = _depthSamplerHZB,
+            .imageView = _depthImageMipMapViews[i],
+            .imageLayout = VK_IMAGE_LAYOUT_GENERAL
+        };
+
+        VkDescriptorImageInfo sourceTarget{
+            .sampler = _depthSamplerHZB,
+            .imageView = VK_NULL_HANDLE,
+            .imageLayout = VK_IMAGE_LAYOUT_UNDEFINED
+        };
+
+        // FIXME (TF 13 MAY 2026): move this iteration out of the loop to remove the branch
+        if (i == 0)
+        {
+            sourceTarget.imageView = _depthImage.imageView;
+            sourceTarget.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        else
+        {
+            sourceTarget.imageView = _depthImageMipMapViews[i - 1];
+            sourceTarget.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+
+        // TODO (TF 13 MAY 2026): **stopped here** now that depth has allocated miplevels and all mip imageViews are created
+         // submit the views to a compute shader with the custom sampler to FILL the miplevels
+        // IE: create the DescriptoSetLayout, the DescriptorSet, Write to the DescriptorSet, and dispatch a compute shader
+        // .. may require a new descriptor pool allocation layout
+        // also bind a push constant for the reduction ratio for that level
+    }
+}
+
 void VulkanEngine::init_swapchain()
 {
     create_swapchain(_windowExtent.width, _windowExtent.height);
@@ -654,8 +690,7 @@ void VulkanEngine::init_swapchain()
 
     VkImageCreateInfo rimg_info = vkinit::image_create_info(_drawImage.imageFormat, drawImageUsages, drawImageExtent);
     VkImageCreateInfo dimg_info = vkinit::image_create_info(_depthImage.imageFormat, depthImageUsages, drawImageExtent);
-    dimg_info.mipLevels = 1; // TODO (TF 12 MAY 2026): *** stopped here ***, depth texture must support enough mips to get down to a single depth texel
-
+    dimg_info.mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(drawImageExtent.width, drawImageExtent.height))) + 1); // Hierarchical Z-Buffer depth pyramid setup
 
     // abstract image allocation and binding with VulkanMemoryAllocator
     VmaAllocationCreateInfo img_allocInfo = {};
@@ -672,9 +707,25 @@ void VulkanEngine::init_swapchain()
 
     VK_CHECK(vkCreateImageView(_device, &dview_info, nullptr, &_depthImage.imageView));
 
+    _depthImageMipMapViews.reserve(dimg_info.mipLevels - 1);// 0th mipLevel imageView is in the AllocatedImage: _depthImage.imageView
+ 
+    for (int32_t i = 1; i < dimg_info.mipLevels; ++i)
+    {
+        dview_info.subresourceRange.baseMipLevel = i;
+        VK_CHECK(vkCreateImageView(_device, &dview_info, nullptr, &_depthImageMipMapViews[i]));
+    }
+ 
+    init_depthPyramidHZB(dimg_info.mipLevels);
+
     _mainDeletionQueue.push_function([=]() {
         vkDestroyImageView(_device, _drawImage.imageView, nullptr);
         vkDestroyImageView(_device, _depthImage.imageView, nullptr);
+
+        for (int i = 1; i < dimg_info.mipLevels; ++i)
+        {
+            vkDestroyImageView(_device, _depthImageMipMapViews[i], nullptr);
+        }
+
         vmaDestroyImage(_allocator, _drawImage.image, _drawImage.allocation);
         vmaDestroyImage(_allocator, _depthImage.image, _depthImage.allocation);
     });

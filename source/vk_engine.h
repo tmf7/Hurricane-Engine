@@ -156,7 +156,8 @@ public:
 	VmaAllocator _allocator;
 
 	AllocatedImage _drawImage;
-	AllocatedImage _depthImage; // TODO (TF 12 APR 2026): create _depthImage with mipLevels, then use compute shader to fill levels...via ImageViews (then use a separate image/imageviews so 0th mip is actually downsampled _depthImage already)
+	AllocatedImage _depthImage;
+	std::vector<VkImageView> _depthImageMipMapViews;
 	VkExtent2D _drawExtent;
 	float _renderScale = 1.0f;
 
@@ -233,6 +234,7 @@ private:
 
 	void init_vulkan();
 	void init_swapchain();
+	void init_depthPyramidHZB(int32_t mipLevels);
 	void init_commands();
 	void init_sync_structures();
 	void create_swapchain(uint32_t width, uint32_t height);
