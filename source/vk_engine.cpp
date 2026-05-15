@@ -609,6 +609,12 @@ void VulkanEngine::init_vulkan()
 
 void VulkanEngine::init_depthPyramidHZB(int32_t mipLevels)
 {
+    // ================ BEGIN PIPELINE CONFIGURATION and BINDING ================
+
+    // ================ END PIPELINE CONFIGURATION and BINDING ================
+
+
+
     for (int32_t i = 0; i < mipLevels; ++i)
     {
         VkDescriptorImageInfo destTarget{
@@ -737,7 +743,7 @@ void VulkanEngine::init_depthPyramidHZB(int32_t mipLevels)
                 .pTexelBufferView = nullptr
             }}
         };
-
+        
         vkUpdateDescriptorSets(_device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
         // ============ END DESCRIPTOR SET SETUP ============
         // ============ BEGIN COMPUTE PIPELINE SETUP ============       
@@ -786,23 +792,36 @@ void VulkanEngine::init_depthPyramidHZB(int32_t mipLevels)
         // ============ END COMPUTE PIPELINE SETUP ============
         
          
-        // TODO (TF 13 MAY 2026): **stopped here** now that depth has allocated miplevels and all mip imageViews are created
-         // submit the views to a compute shader with the custom sampler to FILL the miplevels
-        // IE: create the DescriptoSetLayout, the DescriptorSet, Write to the DescriptorSet, and dispatch a compute shader
-        // .. may require a new descriptor pool allocation layout
-        // also bind a push constant for the reduction ratio for that level
 
     /*
+        // TODO (TF 15 MAY 2026): **stopped here**
         FLOW:
-        1. Create a VkDescriptorPool using VkDescriptorPoolSize of expected bindings
-        2. Create a VkDescriptorLayout using VkDescriptorSetLayoutBindings (specific bind points and stages, NOT specific data)
-        3. Allocate a VkDescriptorSet from the VkDescriptorPool using the VkDescriptorLayout in VkDescriptorSetAllocateInfo
-        4. Call vkUpdateDescriptorSets using a set of VkWriteDescriptorSet (containing specific data handles in VkDescriptorImageInfo / VkDescriptorBufferInfo)
+        [x] 1. Create a VkDescriptorPool using VkDescriptorPoolSize of expected bindings
+        [x] 2. Create a VkDescriptorLayout using VkDescriptorSetLayoutBindings (specific bind points and stages, NOT specific data)
+        [x] 3. Allocate a VkDescriptorSet from the VkDescriptorPool using the VkDescriptorLayout in VkDescriptorSetAllocateInfo
+        [x] 4. Call vkUpdateDescriptorSets using a set of VkWriteDescriptorSet (containing specific data handles in VkDescriptorImageInfo / VkDescriptorBufferInfo)
 
         // VK_KHR_dynamic_rendering_local_read for performant subpass read/write logic formerly in renderpasses
-        1. Create a VkPipelineLayout using VkPipelineLayoutCreateInfo of expected PushConstant footprint
-        2. Create a VkPipeline using the VkPipelineLayout
-        3. vkCmdBindPipeline -> VkCmdBindDescriptorSets -> vkCmdPushConstants -> vkCmdDispatch, vkCmdDrawIndexed, vkCmdDrawIndexedIndirect, etc
+        [x] 1. Create a VkPipelineLayout using VkPipelineLayoutCreateInfo of expected PushConstant footprint
+        [x] 2. Create a VkPipeline using the VkPipelineLayout
+        [ ] 3. vkCmdBindPipeline -> VkCmdBindDescriptorSets -> vkCmdPushConstants -> vkCmdDispatch, vkCmdDrawIndexed, vkCmdDrawIndexedIndirect, etc
+    
+        // atomicMin, atomicMax (InterlockedMin, InterlockedMax) on float depth values using "asint" or "asuint"
+        // ARB_gpu_shader5 or ARB_shader_bit_encoding with glsl version 400: floatBitsToInt or floatBitsToUint
+        // glsl texelFetch or imageLoad to get specific texel data without filtering (glsl version 420)
+        // ==> 
+        // float inDepth = imageLoad(inImage, pos).x;
+        // float outDepth = imageLoad(outImage, WHERE???MATH???)
+        // atomicMax(outDepth, inDepth) // outDepth contains max
+        // imageStore(outImage, pos, outDepth)
+        // TODO: user per-frame vkDescriptorSets using get_current_frame (have the layout cached though)
+        // use non-uniform Descriptor indexing to bind a single descriptor set with ALL mipmap imageViews, then index into the dynamically sized compute shader array to WRITE to the correct texel
+        // FIXME: how can the dispatch identify the MIPMAP LEVEL to WRITE to? a push constant? the workgroup xyz?
+        // TODO (TF 15 MAY 2026): before occlusion culling => render the depth buffer to the screen every frame using a graphics shader to confirm its working (add this to blog)
+        // 4k = 4096 x 4096 = 16,777,216 => mipchain(12): 2048 -> 1024 -> 512 -> 256 -> 128 -> 64 -> 32 -> 16 -> 8 -> 4 -> 2 -> 1
+        // 1024 x 1024 = 1,048,576 => mipchain(10): 512 -> 256 -> 128 -> 64 -> 32 -> 16 -> 8 -> 4 -> 2 -> 1
+        // normal kernel size is 2x2 (1 thread doing 4 samples and taking max)
+        // possibly use Z-value of (gl_LocalInvocationID, gl_WorkGroupID, or gl_GlobalInvocationID) to index mip level
     */
     }
 }
