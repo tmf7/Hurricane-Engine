@@ -402,6 +402,8 @@ void VulkanEngine::draw()
     vkutil::transition_image(cmd, _drawImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
 
     draw_background(cmd);
+    
+    // TODO (TF 16 MAY 2026): use the prior frame's _depthImage to create the depth pyramid HERE (before the _depthImage is overwritten with this frame's data)
 
     vkutil::transition_image(cmd, _drawImage.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     vkutil::transition_image(cmd, _depthImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
@@ -607,13 +609,66 @@ void VulkanEngine::init_vulkan()
     });
 }
 
+// sets up the mipamp compute pipeline, and transitions all depth mip imageViews to layouts ready for read/write 
 void VulkanEngine::init_depthPyramidHZB(int32_t mipLevels)
 {
+    /*
+    // TODO (TF 15/16 MAY 2026): **stopped here**
+    FLOW:
+    [x] 1. Create a VkDescriptorPool using VkDescriptorPoolSize of expected bindings
+    [x] 2. Create a VkDescriptorLayout using VkDescriptorSetLayoutBindings (specific bind points and stages, NOT specific data)
+    [x] 3. Allocate a VkDescriptorSet from the VkDescriptorPool using the VkDescriptorLayout in VkDescriptorSetAllocateInfo
+    [x] 4. Call vkUpdateDescriptorSets using a set of VkWriteDescriptorSet (containing specific data handles in VkDescriptorImageInfo / VkDescriptorBufferInfo)
+
+    // VK_KHR_dynamic_rendering_local_read for performant subpass read/write logic formerly in renderpasses
+    [x] 1. Create a VkPipelineLayout using VkPipelineLayoutCreateInfo of expected PushConstant footprint
+    [x] 2. Create a VkPipeline using the VkPipelineLayout
+    [ ] 3. vkCmdBindPipeline -> VkCmdBindDescriptorSets -> vkCmdPushConstants -> vkCmdDispatch, vkCmdDrawIndexed, vkCmdDrawIndexedIndirect, etc
+
+    // atomicMin, atomicMax (InterlockedMin, InterlockedMax) on float depth values using "asint" or "asuint"
+    // ARB_gpu_shader5 or ARB_shader_bit_encoding with glsl version 400: floatBitsToInt or floatBitsToUint
+    // glsl texelFetch or imageLoad to get specific texel data without filtering (glsl version 420)
+    // === BEGIN COMPUTE SHADER PSEUDO-CODE ===
+    // float inDepth = imageLoad(inImage, pos).x;
+    // float outDepth = imageLoad(outImage, WHERE???MATH???)
+    // atomicMax(outDepth, inDepth) // outDepth contains max
+    // imageStore(outImage, pos, outDepth)
+    // === END COMPUTE SHADER PSEUDO-CODE ===
+
+    // TODO: user per-frame vkDescriptorSets using get_current_frame (have the layout cached though)
+    // use non-uniform Descriptor indexing to bind a single descriptor set with ALL mipmap imageViews, then index into the dynamically sized compute shader array to WRITE to the correct texel
+    
+    // TODO (TF 15 MAY 2026): before occlusion culling => render the depth buffer to the screen every frame using a graphics shader to confirm its working (add this to blog)
+    // FIXME: how can the dispatch identify the MIPMAP LEVEL to WRITE to? a push constant? the workgroup xyz?
+    // normal kernel size is 2x2 (1 thread doing 4 samples and taking max)
+    // possibly use Z-value of (gl_LocalInvocationID, gl_WorkGroupID, or gl_GlobalInvocationID) to index mip level
+    // and use 2^z-value to derive implicit sampling kernel (2x2, 4x4, 8x8, 16x16, etc)
+    // ...use the specialized 2x2 sampler somehow because samplers are more performant in the driver/hardware
+    // TODO: consider samplerInfo.unnormalizedCoordinates for exact sample area bounds in shader (uses xy of width x height, instead of uv)
+*/
+
     // ================ BEGIN PIPELINE CONFIGURATION and BINDING ================
 
     // ================ END PIPELINE CONFIGURATION and BINDING ================
+    
+    // depthImage[0]: [FRAME 1] VK_IMAGE_LAYOUT_UNDEFINED -> VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL -> [[VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL (VK_IMAGE_LAYOUT_UNDEFINED)]] -> VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL
+    // vkutil::transition_image(cmd, _depthImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
 
-
+    // 1. INITIALIZE: 
+    //      - create the min/max filter sampler
+    //      - allocate depth image with bound memory and miplevels for its given size (assumes POT memory footprint by default)
+    //      - create all depth image image views for all mip levels (no data in mip levels yet), all views in UNDEFINED layout at startup
+    //      - create the descriptor pool and layout to support an indexed descriptor set for ALL depth image views bound to a single compute dispatch submit, to generate all mip levels in a single compute shader at once (will oversample)
+    //      - create pipeline layout, and pipeline
+    //      - bind Pipeline and (indexed) DescriptorSet
+    // 2. RENDER FRAME:
+    //      - do not create or use the depth pyramid until the depth image has actual frame data, IE: only perform frustum culling on FIRST frame (OR: clear the depth texture before FIRST use and proceed with depth pyramid stuff)
+    //      - on 2nd+ FRAME create the depth pyramid and run fustum + occlusion culling in a single compute dispatch submit, using some kind of memory barrier to confirm depth pyramid is ready (vkEvent? vkSemaphore? queue submit bits?)
+    //      - transition depth image views:
+    //              - ROOT: VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL -> VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL for depth pyramid generation
+    //              - MIPS: VK_IMAGE_LAYOUT_GENERAL (always, because they'd be swapping from VK_IMAGE_LAYOUT_GENERAL <-> VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL otherwise)
+    //              - NOTE: allow normal frame rendering to transition ROOT VK_IMAGE_LAYOUT_UNDEFINED -> VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL (that should be valid, and maybe change srcAccessFlags to avoid flush)
+   
 
     for (int32_t i = 0; i < mipLevels; ++i)
     {
@@ -623,9 +678,10 @@ void VulkanEngine::init_depthPyramidHZB(int32_t mipLevels)
             .imageLayout = VK_IMAGE_LAYOUT_GENERAL
         };
 
+        // TODO: transition depth texture to READ_ONLY_OPTIMAL
         VkDescriptorImageInfo sourceTarget{
             .sampler = _depthSamplerHZB,
-            .imageView = VK_NULL_HANDLE,
+            .imageView = _depthImage.imageView,
             .imageLayout = VK_IMAGE_LAYOUT_UNDEFINED
         };
 
@@ -790,39 +846,6 @@ void VulkanEngine::init_depthPyramidHZB(int32_t mipLevels)
         VkPipeline depthMipmapPipelineHZB{};
         vkCreateComputePipelines(_device, VK_NULL_HANDLE, 1, &computePipelineInfo, nullptr, &depthMipmapPipelineHZB);
         // ============ END COMPUTE PIPELINE SETUP ============
-        
-         
-
-    /*
-        // TODO (TF 15 MAY 2026): **stopped here**
-        FLOW:
-        [x] 1. Create a VkDescriptorPool using VkDescriptorPoolSize of expected bindings
-        [x] 2. Create a VkDescriptorLayout using VkDescriptorSetLayoutBindings (specific bind points and stages, NOT specific data)
-        [x] 3. Allocate a VkDescriptorSet from the VkDescriptorPool using the VkDescriptorLayout in VkDescriptorSetAllocateInfo
-        [x] 4. Call vkUpdateDescriptorSets using a set of VkWriteDescriptorSet (containing specific data handles in VkDescriptorImageInfo / VkDescriptorBufferInfo)
-
-        // VK_KHR_dynamic_rendering_local_read for performant subpass read/write logic formerly in renderpasses
-        [x] 1. Create a VkPipelineLayout using VkPipelineLayoutCreateInfo of expected PushConstant footprint
-        [x] 2. Create a VkPipeline using the VkPipelineLayout
-        [ ] 3. vkCmdBindPipeline -> VkCmdBindDescriptorSets -> vkCmdPushConstants -> vkCmdDispatch, vkCmdDrawIndexed, vkCmdDrawIndexedIndirect, etc
-    
-        // atomicMin, atomicMax (InterlockedMin, InterlockedMax) on float depth values using "asint" or "asuint"
-        // ARB_gpu_shader5 or ARB_shader_bit_encoding with glsl version 400: floatBitsToInt or floatBitsToUint
-        // glsl texelFetch or imageLoad to get specific texel data without filtering (glsl version 420)
-        // ==> 
-        // float inDepth = imageLoad(inImage, pos).x;
-        // float outDepth = imageLoad(outImage, WHERE???MATH???)
-        // atomicMax(outDepth, inDepth) // outDepth contains max
-        // imageStore(outImage, pos, outDepth)
-        // TODO: user per-frame vkDescriptorSets using get_current_frame (have the layout cached though)
-        // use non-uniform Descriptor indexing to bind a single descriptor set with ALL mipmap imageViews, then index into the dynamically sized compute shader array to WRITE to the correct texel
-        // FIXME: how can the dispatch identify the MIPMAP LEVEL to WRITE to? a push constant? the workgroup xyz?
-        // TODO (TF 15 MAY 2026): before occlusion culling => render the depth buffer to the screen every frame using a graphics shader to confirm its working (add this to blog)
-        // 4k = 4096 x 4096 = 16,777,216 => mipchain(12): 2048 -> 1024 -> 512 -> 256 -> 128 -> 64 -> 32 -> 16 -> 8 -> 4 -> 2 -> 1
-        // 1024 x 1024 = 1,048,576 => mipchain(10): 512 -> 256 -> 128 -> 64 -> 32 -> 16 -> 8 -> 4 -> 2 -> 1
-        // normal kernel size is 2x2 (1 thread doing 4 samples and taking max)
-        // possibly use Z-value of (gl_LocalInvocationID, gl_WorkGroupID, or gl_GlobalInvocationID) to index mip level
-    */
     }
 }
 
@@ -1410,8 +1433,12 @@ void VulkanEngine::draw_geometry(VkCommandBuffer cmd)
         engineStats.triangleCount += renderObject.indexCount / 3;
     };
 
-    // draw sorted opaques first
+    // TODO (TF 16 MAY 2026): move frustum cull AND occlusion cull to compute shader using a ONE-TIME SUBMIT vkCommandBuffer (not the current command buffer)
+    // prior to submitting the current vkCommandBuffer (cmd)
     std::span<uint32_t> culledDraws = GetCulledDraws(mainDrawContext.opaqueSurfaces, sceneData.viewProjectionMatrix);
+
+
+    // draw sorted opaques first
     SortDraws(culledDraws, mainDrawContext.opaqueSurfaces);
     for (auto& index : culledDraws)
     {
